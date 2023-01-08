@@ -16,7 +16,10 @@ namespace GameFramework.Fsm
     /// <typeparam name="T">有限状态机持有者类型。</typeparam>
     internal sealed class Fsm<T> : FsmBase, IReference, IFsm<T> where T : class
     {
+        //部分情况下如果该“owner”只有一个Fsm，则“m_Name”参数可以设置为“string.Empty”
         private T m_Owner;
+        //以FsmState的类型为key，FsmState的实例为value进行保存，与“FsmManager”中“m_Fsms”的保存格式不同
+        //由于任何Fsm中绝不可能包含两个一样的FsmState，因此直接使用FsmState类型作为key即可唯一标识单个FsmState
         private readonly Dictionary<Type, FsmState<T>> m_States;
         private Dictionary<string, Variable> m_Datas;
         private FsmState<T> m_CurrentState;
@@ -33,6 +36,10 @@ namespace GameFramework.Fsm
             m_Datas = null;
             m_CurrentState = null;
             m_CurrentStateTime = 0f;
+            //执行该构造方法的时机通常在“引用池”中没有该类型对象，或者放入引用池前需要“Clear”操作时，该参数才会为“true”
+            //而只是简单的创建一个“Fsm”实例，却没有为其设置“m_States”等参数时，该Fsm依然保持为“Destoyed”状态
+            //PS:与通常意义上的“Destroyed”有一些不同，但主要是因为该参数需要用于“GameFrameworkModule”中的轮询
+            //    如果只是简单创建一个Fsm实例，而没有设置“m_States”数值，此时需要加入“轮询Update”操作
             m_IsDestroyed = true;
         }
 
@@ -143,6 +150,8 @@ namespace GameFramework.Fsm
                 throw new GameFrameworkException("FSM states is invalid.");
             }
 
+            //引用池和对象池分属不同的作用范围，针对没有频繁创建的对象使用“引用池”
+            //如果池子中没有该对象实例，则创建一个新的实例，此时“fsm”实例对象自然包含“Name”,"m_Owner","m_States"等参数
             Fsm<T> fsm = ReferencePool.Acquire<Fsm<T>>();
             fsm.Name = name;
             fsm.m_Owner = owner;
@@ -155,15 +164,20 @@ namespace GameFramework.Fsm
                 }
 
                 Type stateType = state.GetType();
+                //理论上该将“Fsm”放入引用池之前已经该Fsm对象进行Reset操作，因此当再次从引用池中获取到该对象实例时，自然不会包含“stateType”
+                //这里增加判断可以在一定程度上避免报错
                 if (fsm.m_States.ContainsKey(stateType))
                 {
                     throw new GameFrameworkException(Utility.Text.Format("FSM '{0}' state '{1}' is already exist.", new TypeNamePair(typeof(T), name), stateType.FullName));
                 }
 
+                //为该Fsm的"m_States"(字典形式)中添加新的FsmState
                 fsm.m_States.Add(stateType, state);
+                //当向Fsm中添加FsmState时，即会马上执行该FsmState的“OnInit”函数
                 state.OnInit(fsm);
             }
 
+            //创建Fsm完毕后将其作为方法返回值
             return fsm;
         }
 
@@ -255,6 +269,9 @@ namespace GameFramework.Fsm
         /// <typeparam name="TState">要开始的有限状态机状态类型。</typeparam>
         public void Start<TState>() where TState : FsmState<T>
         {
+            //任何Fsm其启动必然只有一次，并且在创建Fsm时仅仅只是设置该Fsm中的所有FsmState(通过字典的方式进行存储)，
+            //并且将所有的FsmState进行“OnInit”操作，但并没有设置该Fsm的“m_CurrentState”
+            //因此这也提供了可以“自由设置Fsm的启动FsmState”的选择
             if (IsRunning)
             {
                 throw new GameFrameworkException("FSM is running, can not start again.");
@@ -263,10 +280,11 @@ namespace GameFramework.Fsm
             FsmState<T> state = GetState<TState>();
             if (state == null)
             {
+                //“Format”方法中会自动触发“TypeNamePair”的“ToString”方法
                 throw new GameFrameworkException(Utility.Text.Format("FSM '{0}' can not start state '{1}' which is not exist.", new TypeNamePair(typeof(T), Name), typeof(TState).FullName));
             }
 
-            m_CurrentStateTime = 0f;
+            m_CurrentStateTime = 0f;  //设置FsmState持续时间
             m_CurrentState = state;
             m_CurrentState.OnEnter(this);
         }
@@ -536,11 +554,14 @@ namespace GameFramework.Fsm
         /// <param name="realElapseSeconds">真实流逝时间，以秒为单位。</param>
         internal override void Update(float elapseSeconds, float realElapseSeconds)
         {
+            //更新该Fsm当前FsmState的更新操作，具体的Update逻辑则由该FsmState自身来定义 —— 具有充分的自由度
+            //PS: 如果当前该Fsm没有启动，则此时“m_CurrentState”为null，此时无需更新
             if (m_CurrentState == null)
             {
                 return;
             }
 
+            //同时在此基础上更新Fsm中该FsmState持续的时间 —— 该时间在每次切换FsmState时会被清空，并不会始终积累
             m_CurrentStateTime += elapseSeconds;
             m_CurrentState.OnUpdate(this, elapseSeconds, realElapseSeconds);
         }
@@ -550,6 +571,7 @@ namespace GameFramework.Fsm
         /// </summary>
         internal override void Shutdown()
         {
+            //关闭该Fsm时需要将其放入引用池中
             ReferencePool.Release(this);
         }
 

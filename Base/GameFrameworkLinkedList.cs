@@ -18,7 +18,13 @@ namespace GameFramework
     /// <typeparam name="T">指定链表的元素类型。</typeparam>
     public sealed class GameFrameworkLinkedList<T> : ICollection<T>, IEnumerable<T>, ICollection, IEnumerable
     {
+        //“LinkedList”集合的形式可以方便“Priority”参数起到作用，正好用于“GameFrameworkEntry.s_GameFrameworkModules”集合中，
+        //用于存储拥有不同“Priority”的“GameFrameworkModule”
         private readonly LinkedList<T> m_LinkedList;
+        //本质上拥有一个“LinkedList”集合已然足够，加入“m_CachedNodes”的目的在于：
+        //“LinkedList”集合中的元素可能发生“增删”操作，为了节省资源，这里使用队列池子存储起来
+        //实在话：除非该集合中的元素依然具有类似“GameFrameworkModule.Priority”的需求，否则不建议使用“LinkedList”来存储元素
+        //      因为“查找”操作时间复杂度很高
         private readonly Queue<LinkedListNode<T>> m_CachedNodes;
 
         /// <summary>
@@ -307,7 +313,9 @@ namespace GameFramework
                 throw new GameFrameworkException("First is invalid.");
             }
 
+            //这里的“Remove”只是从“LinkedList”集合中移除，该对象“first”本身依然存在
             m_LinkedList.RemoveFirst();
+            //因此这里可以直接将该对象“first”加入缓存队列中
             ReleaseNode(first);
         }
 
@@ -353,7 +361,9 @@ namespace GameFramework
 
         private void ReleaseNode(LinkedListNode<T> node)
         {
+            //这里在入缓存列表前已将该类型对象重置为初始状态 —— “default”关键字确实很重要
             node.Value = default(T);
+            //将重置为初始状态的对象入缓存队列中，以方便下次取用
             m_CachedNodes.Enqueue(node);
         }
 

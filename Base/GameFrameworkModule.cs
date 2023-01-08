@@ -14,6 +14,8 @@ namespace GameFramework
     {
         /// <summary>
         /// 获取游戏框架模块优先级。
+        /// PS: 该参数很重要，用于设定集合中各个Module的添加顺序，也因为这个特性，这里需要使用方便“增删”操作的集合形式“LinkedList”
+        ///     来存储该类型对象实例
         /// </summary>
         /// <remarks>优先级较高的模块会优先轮询，并且关闭操作会后进行。</remarks>
         internal virtual int Priority

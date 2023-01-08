@@ -14,6 +14,9 @@ namespace GameFramework.Fsm
     /// </summary>
     public abstract class FsmBase
     {
+        //理论上讲，任意一个Fsm都应该有唯一的"m_Name"参数，但由于加入“m_Owner”，而部分“Owner”在整个项目中其实只会有一个“Fsm”
+        //因此在这种情况下，“FsmManager”的“m_Fsms”字典集合中直接可以通过“Owner”唯一标识单个Fsm
+        //此时无需设置该Fsm的“m_Name”参数
         private string m_Name;
 
         /// <summary>

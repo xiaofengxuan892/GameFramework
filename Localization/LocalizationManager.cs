@@ -18,6 +18,8 @@ namespace GameFramework.Localization
     {
         private readonly Dictionary<string, string> m_Dictionary;
         private readonly DataProvider<ILocalizationManager> m_DataProvider;
+        //这里实际需要的功能其实不多，因此这里直接定义“ILocalizationHelper”，在实际项目中实现该接口即可
+        //也可根据实际需要，增加更多自定义功能
         private ILocalizationHelper m_LocalizationHelper;
         private Language m_Language;
 
@@ -95,6 +97,7 @@ namespace GameFramework.Localization
         /// </summary>
         public event EventHandler<ReadDataSuccessEventArgs> ReadDataSuccess
         {
+            //这里的“add”, "remove"分别对应“Event”操作符“+”，“-”(可以直接使用)
             add
             {
                 m_DataProvider.ReadDataSuccess += value;
@@ -322,6 +325,7 @@ namespace GameFramework.Localization
             return m_DataProvider.ParseData(dictionaryBytes, startIndex, length, userData);
         }
 
+        #region 从字典中获取指定key的元素值
         /// <summary>
         /// 根据字典主键获取字典内容字符串。
         /// </summary>
@@ -329,6 +333,7 @@ namespace GameFramework.Localization
         /// <returns>要获取的字典内容字符串。</returns>
         public string GetString(string key)
         {
+            //“GetRawString”方法甚是普通，仅仅只是从字典中取出value而已。从实际作用来看，应该起名为“GetValueByKey”
             string value = GetRawString(key);
             if (value == null)
             {
@@ -338,6 +343,90 @@ namespace GameFramework.Localization
             return value;
         }
 
+        /// <summary>
+        /// 是否存在字典。
+        /// </summary>
+        /// <param name="key">字典主键。</param>
+        /// <returns>是否存在字典。</returns>
+        public bool HasRawString(string key)
+        {
+            if (string.IsNullOrEmpty(key))
+            {
+                throw new GameFrameworkException("Key is invalid.");
+            }
+
+            return m_Dictionary.ContainsKey(key);
+        }
+
+        /// <summary>
+        /// 根据字典主键获取字典值。
+        /// PS: 该方法甚是普通，为何要起名为“xxRawString”？有混淆视听的嫌疑
+        /// </summary>
+        /// <param name="key">字典主键。</param>
+        /// <returns>字典值。</returns>
+        public string GetRawString(string key)
+        {
+            if (string.IsNullOrEmpty(key))
+            {
+                throw new GameFrameworkException("Key is invalid.");
+            }
+
+            string value = null;
+            if (m_Dictionary.TryGetValue(key, out value))
+            {
+                return value;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 增加字典。
+        /// </summary>
+        /// <param name="key">字典主键。</param>
+        /// <param name="value">字典内容。</param>
+        /// <returns>是否增加字典成功。</returns>
+        public bool AddRawString(string key, string value)
+        {
+            if (string.IsNullOrEmpty(key))
+            {
+                throw new GameFrameworkException("Key is invalid.");
+            }
+
+            if (m_Dictionary.ContainsKey(key))
+            {
+                return false;
+            }
+
+            m_Dictionary.Add(key, value ?? string.Empty);
+            return true;
+        }
+
+        /// <summary>
+        /// 移除字典。
+        /// </summary>
+        /// <param name="key">字典主键。</param>
+        /// <returns>是否移除字典成功。</returns>
+        public bool RemoveRawString(string key)
+        {
+            if (string.IsNullOrEmpty(key))
+            {
+                throw new GameFrameworkException("Key is invalid.");
+            }
+
+            return m_Dictionary.Remove(key);
+        }
+
+        /// <summary>
+        /// 清空所有字典。
+        /// </summary>
+        public void RemoveAllRawStrings()
+        {
+            m_Dictionary.Clear();
+        }
+        #endregion
+
+        #region 后续方法甚是简单，只是根据不同的参数个数拼接文本内容，，唯一区别在于借助泛型实现不同的参数个数
         /// <summary>
         /// 根据字典主键获取字典内容字符串。
         /// </summary>
@@ -980,86 +1069,6 @@ namespace GameFramework.Localization
                 return Utility.Text.Format("<Error>{0},{1},{2},{3}", key, value, args, exception);
             }
         }
-
-        /// <summary>
-        /// 是否存在字典。
-        /// </summary>
-        /// <param name="key">字典主键。</param>
-        /// <returns>是否存在字典。</returns>
-        public bool HasRawString(string key)
-        {
-            if (string.IsNullOrEmpty(key))
-            {
-                throw new GameFrameworkException("Key is invalid.");
-            }
-
-            return m_Dictionary.ContainsKey(key);
-        }
-
-        /// <summary>
-        /// 根据字典主键获取字典值。
-        /// </summary>
-        /// <param name="key">字典主键。</param>
-        /// <returns>字典值。</returns>
-        public string GetRawString(string key)
-        {
-            if (string.IsNullOrEmpty(key))
-            {
-                throw new GameFrameworkException("Key is invalid.");
-            }
-
-            string value = null;
-            if (m_Dictionary.TryGetValue(key, out value))
-            {
-                return value;
-            }
-
-            return null;
-        }
-
-        /// <summary>
-        /// 增加字典。
-        /// </summary>
-        /// <param name="key">字典主键。</param>
-        /// <param name="value">字典内容。</param>
-        /// <returns>是否增加字典成功。</returns>
-        public bool AddRawString(string key, string value)
-        {
-            if (string.IsNullOrEmpty(key))
-            {
-                throw new GameFrameworkException("Key is invalid.");
-            }
-
-            if (m_Dictionary.ContainsKey(key))
-            {
-                return false;
-            }
-
-            m_Dictionary.Add(key, value ?? string.Empty);
-            return true;
-        }
-
-        /// <summary>
-        /// 移除字典。
-        /// </summary>
-        /// <param name="key">字典主键。</param>
-        /// <returns>是否移除字典成功。</returns>
-        public bool RemoveRawString(string key)
-        {
-            if (string.IsNullOrEmpty(key))
-            {
-                throw new GameFrameworkException("Key is invalid.");
-            }
-
-            return m_Dictionary.Remove(key);
-        }
-
-        /// <summary>
-        /// 清空所有字典。
-        /// </summary>
-        public void RemoveAllRawStrings()
-        {
-            m_Dictionary.Clear();
-        }
+        #endregion
     }
 }

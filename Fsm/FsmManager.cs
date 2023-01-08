@@ -65,16 +65,20 @@ namespace GameFramework.Fsm
 
             foreach (KeyValuePair<TypeNamePair, FsmBase> fsm in m_Fsms)
             {
+                //只需要Fsm本身，因此后续的“Update”也只是更新该Fsm而已
                 m_TempFsms.Add(fsm.Value);
             }
 
             foreach (FsmBase fsm in m_TempFsms)
             {
+                //新创建的Fsm实例(没有设置m_States参数)或者加入“引用池”前该参数都会被设置为“True”，此时的Fsm都不会执行“Update”操作
                 if (fsm.IsDestroyed)
                 {
                     continue;
                 }
 
+                //所有的“Fsm”都默认包含有“Update”方法，在其中会执行“m_CurrentState”的“Update”操作，即FsmState的Update
+                //例如“ProcedureBase”则会执行该流程的“Update”
                 fsm.Update(elapseSeconds, realElapseSeconds);
             }
         }
@@ -253,6 +257,10 @@ namespace GameFramework.Fsm
         /// <returns>要创建的有限状态机。</returns>
         public IFsm<T> CreateFsm<T>(string name, T owner, params FsmState<T>[] states) where T : class
         {
+            //能够唯一区分某一个Fsm的方式是其Owner，因此将其作为字典中key的一部分
+            //而一个Fsm中的FsmState绝对不可能存在两个一样的，因此直接使用FsmState的类型即可作为key
+            //一个Owner可能包含有多个Fsm，因此增加“name”参数作为key的一部分来为唯一的标识单个Fsm
+            //由此“TypeNamePair”应运而生
             TypeNamePair typeNamePair = new TypeNamePair(typeof(T), name);
             if (HasFsm<T>(name))
             {
@@ -399,6 +407,7 @@ namespace GameFramework.Fsm
         private bool InternalDestroyFsm(TypeNamePair typeNamePair)
         {
             FsmBase fsm = null;
+            //其本质仍旧是通过该Fsm自身的“shutdown”方法来关闭该Fsm
             if (m_Fsms.TryGetValue(typeNamePair, out fsm))
             {
                 fsm.Shutdown();

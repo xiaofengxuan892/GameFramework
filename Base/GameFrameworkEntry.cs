@@ -12,6 +12,9 @@ namespace GameFramework
 {
     /// <summary>
     /// 游戏框架入口。
+    /// PS: 管理所有的“GameFrameworkModule”，包含“CreateModule”，“GetModule”，以及“UpdateModule”
+    ///     甚至包含关闭所有的“Module”
+    ///     整个游戏通过各个Module来驱动，所有Module必然包含“Update”和“Shutdown”功能函数
     /// </summary>
     public static class GameFrameworkEntry
     {
@@ -24,6 +27,10 @@ namespace GameFramework
         /// <param name="realElapseSeconds">真实流逝时间，以秒为单位。</param>
         public static void Update(float elapseSeconds, float realElapseSeconds)
         {
+            //注意：由于每个Module都包含“Pripority”参数用于设定各个Module的优先级，
+            //     而在“CreateModule”添加到集合中时也依然需要根据该Pripority进行添加，
+            //     若直接使用List/Dictionary/Array等方式进行添加，则无法达到“优先级”的效果，这也是使用“LinkedList”的其中一个原因
+            //     因为“LinkedList”可以自由的设定节点的添加位置 —— 这正是“Priority”参数能够起到效果的集合形式
             foreach (GameFrameworkModule module in s_GameFrameworkModules)
             {
                 module.Update(elapseSeconds, realElapseSeconds);
@@ -101,6 +108,7 @@ namespace GameFramework
         /// <returns>要创建的游戏框架模块。</returns>
         private static GameFrameworkModule CreateModule(Type moduleType)
         {
+            //创建Module实例
             GameFrameworkModule module = (GameFrameworkModule)Activator.CreateInstance(moduleType);
             if (module == null)
             {

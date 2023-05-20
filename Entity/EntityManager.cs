@@ -14,24 +14,41 @@ namespace GameFramework.Entity
 {
     /// <summary>
     /// 实体管理器。
+    /// PS：对于实体的生存周期，是不是“实体隐藏”时就同时意味着进入生存末期，要开始回收了？？
     /// </summary>
     internal sealed partial class EntityManager : GameFrameworkModule, IEntityManager
     {
+        //从“InternalShowEntity”和“InternalHideEntity”中的逻辑可知：
+        //集合“m_EntityInfos”和“EntityGroup.m_Entities”中都只包含处于显示状态的实体
+        //任何在Unity编辑器的“Hierarchy”中隐藏的实体都不会包含在以上集合中
         private readonly Dictionary<int, EntityInfo> m_EntityInfos;
         private readonly Dictionary<string, EntityGroup> m_EntityGroups;
+        //该集合中”key“代表”实体id“
+        //“m_EntitiesBeingLoaded”指的是“正在加载中的实体”，如果某个实体当前“正在加载中”，但收到“卸载指令”，
+        //则此时会将其放入“m_EntitiesToReleaseOnLoad”集合中，但同时会清除“m_EntitiesBeingLoaded”中该实体标记
+        //虽然本质上该实体当前仍处在“加载中”，需要等待加载完毕后在“加载回调”中检测“m_EntitiesToReleaseOnLoad”集合
+        //如果包含则将实体资源卸载(注意：m_EntitiesToReleaseOnLoad中存储的是“加载资源的编号id”)
         private readonly Dictionary<int, int> m_EntitiesBeingLoaded;
+        //专用于“正在加载资源中”的实体收到“需要HideEntity”的指令的情况使用，此时的目的是“卸载该实体使用的资源”，而非实体“GameObject”本身
+        //因此这里借助“m_Serial”，而不是“entityId”来区分
         private readonly HashSet<int> m_EntitiesToReleaseOnLoad;
+        //1.专用于标记加载的实体资源，以防“加载资源完成后需要Hide该实体”，此时可以直接通过该“m_Serial”卸载对应的资源
+        //2.只有在“加载实体资源完成前”和“创建实体对象前”有效。如果“实体对象EntityInstanceObject”已经创建完成则该参数没有任何作用
+        private int m_Serial;
+
         private readonly Queue<EntityInfo> m_RecycleQueue;
         private readonly LoadAssetCallbacks m_LoadAssetCallbacks;
         private IObjectPoolManager m_ObjectPoolManager;
         private IResourceManager m_ResourceManager;
         private IEntityHelper m_EntityHelper;
-        private int m_Serial;
+
         private bool m_IsShutdown;
+        //“显示实体”的委托
         private EventHandler<ShowEntitySuccessEventArgs> m_ShowEntitySuccessEventHandler;
         private EventHandler<ShowEntityFailureEventArgs> m_ShowEntityFailureEventHandler;
         private EventHandler<ShowEntityUpdateEventArgs> m_ShowEntityUpdateEventHandler;
         private EventHandler<ShowEntityDependencyAssetEventArgs> m_ShowEntityDependencyAssetEventHandler;
+        //“隐藏实体”的委托：
         private EventHandler<HideEntityCompleteEventArgs> m_HideEntityCompleteEventHandler;
 
         /// <summary>
@@ -171,10 +188,20 @@ namespace GameFramework.Entity
                     throw new GameFrameworkException("Entity group is invalid.");
                 }
 
+                //1.先回收该entity：包括先将本实体重置，然后放入池子中以便复用
                 entityInfo.Status = EntityStatus.WillRecycle;
                 entity.OnRecycle();
+                //这里在如此段的语句逻辑中接连出现“WillRecycle/Recycled”，主要是为了应对什么情况的？
+                //如果“OnRecycle”中执行有协程，那也会遇到“yield”语句后跳转会这里，“yield”影响的只是
+                //本协程内该“yield return”之后的语句执行
+                //除非“entity”内部的“OnRecycle”逻辑非常复杂，需要耗费相当的时间，但这种情况极为少见
+                //总的来讲：在这里切换“Status”本身也不会说有错而已。
                 entityInfo.Status = EntityStatus.Recycled;
+                //使用“entityGroup”回收对象，是因为“每个不同实体分组中所包含的实体不同”，如果使用统一的对象池回收
+                //则无法达到“方便复用”的效果，因此各个不同实体之间是无法通用的
                 entityGroup.UnspawnEntity(entity);
+
+                //2.再回收该entity对应的“entityInfo”
                 ReferencePool.Release(entityInfo);
             }
 
@@ -190,6 +217,7 @@ namespace GameFramework.Entity
         internal override void Shutdown()
         {
             m_IsShutdown = true;
+            //其实“Hide”的定义有些混乱：是否处于“Hide”状态的实体就会直接进入“循环”？？
             HideAllLoadedEntities();
             m_EntityGroups.Clear();
             m_EntitiesBeingLoaded.Clear();
@@ -321,6 +349,8 @@ namespace GameFramework.Entity
         /// <returns>是否增加实体组成功。</returns>
         public bool AddEntityGroup(string entityGroupName, float instanceAutoReleaseInterval, int instanceCapacity, float instanceExpireTime, int instancePriority, IEntityGroupHelper entityGroupHelper)
         {
+            //其实从某种角度来看，可以为“EntityGroup”创建一个类似于“ShowEnityInfo、AttachEntityInfo”等的数据结构类
+            //这里将各个参数分散传递过来也挺好
             if (string.IsNullOrEmpty(entityGroupName))
             {
                 throw new GameFrameworkException("Entity group name is invalid.");
@@ -476,6 +506,7 @@ namespace GameFramework.Entity
         public IEntity[] GetAllLoadedEntities()
         {
             int index = 0;
+            //根据当前“实体声明周期”设置，当实体处于“Hidden“状态时其实已经开始将其加入”回收队列“中
             IEntity[] results = new IEntity[m_EntityInfos.Count];
             foreach (KeyValuePair<int, EntityInfo> entityInfo in m_EntityInfos)
             {
@@ -549,6 +580,7 @@ namespace GameFramework.Entity
 
         /// <summary>
         /// 是否是合法的实体。
+        /// PS：按当前逻辑来看，指的是”当前显示的实体“，所以进入”循环队列“等待被回收的实体不是合法的实体
         /// </summary>
         /// <param name="entity">实体。</param>
         /// <returns>实体是否合法。</returns>
@@ -627,6 +659,7 @@ namespace GameFramework.Entity
                 throw new GameFrameworkException("Entity group name is invalid.");
             }
 
+            //从这里的判断也能看出：m_EntityInfos中的实体必然是处于”Show“状态的实体
             if (HasEntity(entityId))
             {
                 throw new GameFrameworkException(Utility.Text.Format("Entity id '{0}' is already exist.", entityId));
@@ -643,15 +676,19 @@ namespace GameFramework.Entity
                 throw new GameFrameworkException(Utility.Text.Format("Entity group '{0}' is not exist.", entityGroupName));
             }
 
+            //注意：这里的“entityAssetName”其实是完整的资源名字，如“Assets/GameMain/Entities/{0}.prefab”等
             EntityInstanceObject entityInstanceObject = entityGroup.SpawnEntityInstanceObject(entityAssetName);
+            //说明对象池中暂没有可以直接使用的实例，需要新创建，此时“isNewInstance”为“true”，否则为“false”
             if (entityInstanceObject == null)
             {
+                //TODO: 这个”serial“编号到底有什么用？
                 int serialId = ++m_Serial;
                 m_EntitiesBeingLoaded.Add(entityId, serialId);
                 m_ResourceManager.LoadAsset(entityAssetName, priority, m_LoadAssetCallbacks, ShowEntityInfo.Create(serialId, entityId, entityGroup, userData));
                 return;
             }
 
+            //注意：这里使用的是“entityInstanceObject.Target”，即“Instantiate出来的GameObject本身”
             InternalShowEntity(entityId, entityAssetName, entityGroup, entityInstanceObject.Target, false, 0f, userData);
         }
 
@@ -666,6 +703,8 @@ namespace GameFramework.Entity
 
         /// <summary>
         /// 隐藏实体。
+        /// PS：“HideEntity”和“InternalHideEntity”的本质区别是，前者提供给外部只需要根据“实体id”即可隐藏实体
+        ///    而后者则是“内部包含的隐藏实体的private方法”
         /// </summary>
         /// <param name="entityId">实体编号。</param>
         /// <param name="userData">用户自定义数据。</param>
@@ -673,7 +712,9 @@ namespace GameFramework.Entity
         {
             if (IsLoadingEntity(entityId))
             {
+                //只有“isLoading”中的实体遇到这种情况才需要使用“m_EntitiesToReleaseOnLoad”
                 m_EntitiesToReleaseOnLoad.Add(m_EntitiesBeingLoaded[entityId]);
+                //这个时候就移除该元素是不是太早了，应该在“加载结束的回调”中再移除该元素吧！！！！
                 m_EntitiesBeingLoaded.Remove(entityId);
                 return;
             }
@@ -725,6 +766,7 @@ namespace GameFramework.Entity
         /// <param name="userData">用户自定义数据。</param>
         public void HideAllLoadedEntities(object userData)
         {
+            //从以下逻辑来看，“m_EntityInfos”代表的是所有“处于OnShow的实体”
             while (m_EntityInfos.Count > 0)
             {
                 foreach (KeyValuePair<int, EntityInfo> entityInfo in m_EntityInfos)
@@ -745,6 +787,7 @@ namespace GameFramework.Entity
                 m_EntitiesToReleaseOnLoad.Add(entityBeingLoaded.Value);
             }
 
+            //“m_EntitiesBeingLoaded”中只保存“正常加载流程中”的实体，对于“加载完成后需要卸载销毁”的实体则不予统计在内
             m_EntitiesBeingLoaded.Clear();
         }
 
@@ -792,6 +835,7 @@ namespace GameFramework.Entity
                 throw new GameFrameworkException(Utility.Text.Format("Can not find parent entity '{0}'.", parentEntityId));
             }
 
+            //这个“ChildEntityCount”不是参数，而是属性 —— 这应该也算是一种用法吧！
             return parentEntityInfo.ChildEntityCount;
         }
 
@@ -808,6 +852,7 @@ namespace GameFramework.Entity
                 throw new GameFrameworkException(Utility.Text.Format("Can not find parent entity '{0}'.", parentEntityId));
             }
 
+            //该方法默认获取第一个“子实体”
             return parentEntityInfo.GetChildEntity();
         }
 
@@ -839,6 +884,7 @@ namespace GameFramework.Entity
                 throw new GameFrameworkException(Utility.Text.Format("Can not find parent entity '{0}'.", parentEntityId));
             }
 
+            //该方法则获取所有“子实体”
             return parentEntityInfo.GetChildEntities();
         }
 
@@ -935,9 +981,12 @@ namespace GameFramework.Entity
 
             IEntity childEntity = childEntityInfo.Entity;
             IEntity parentEntity = parentEntityInfo.Entity;
+            //1.先解除本实体作为其他实体的“附加子实体”的关系
             DetachEntity(childEntity.Id, userData);
+            //2.新设置“附加关系”
             childEntityInfo.ParentEntity = parentEntity;
             parentEntityInfo.AddChildEntity(childEntity);
+            //3.执行各自的“附加、被附加”方法
             parentEntity.OnAttached(childEntity, userData);
             childEntity.OnAttachTo(parentEntity, userData);
         }
@@ -1035,7 +1084,8 @@ namespace GameFramework.Entity
         }
 
         /// <summary>
-        /// 解除子实体。
+        /// 解除子实体
+        /// PS: 从以下逻辑看，解除的是本实体作为其他实体的子实体的关系
         /// </summary>
         /// <param name="childEntityId">要解除的子实体的实体编号。</param>
         /// <param name="userData">用户自定义数据。</param>
@@ -1060,9 +1110,11 @@ namespace GameFramework.Entity
             }
 
             IEntity childEntity = childEntityInfo.Entity;
-            childEntityInfo.ParentEntity = null;
+            //先移除父实体上的关联关系
             parentEntityInfo.RemoveChildEntity(childEntity);
             parentEntity.OnDetached(childEntity, userData);
+            //再解除子实体上的关联关系
+            childEntityInfo.ParentEntity = null;
             childEntity.OnDetachFrom(parentEntity, userData);
         }
 
@@ -1115,6 +1167,8 @@ namespace GameFramework.Entity
             while (parentEntityInfo.ChildEntityCount > 0)
             {
                 IEntity childEntity = parentEntityInfo.GetChildEntity();
+                //这里逻辑比较简单，直接设置所有“子实体的parentEntity”为null，
+                //然后清空父实体的“m_ChildEntities”集合即可
                 DetachEntity(childEntity.Id, userData);
             }
         }
@@ -1163,12 +1217,18 @@ namespace GameFramework.Entity
         {
             try
             {
+                //该方法的命名是“CreateXXX”，但执行的实质内容却是：设置该entityInstance的parentTransform
+                //并使用“GetOrAddComponent”获取该entityInstance上的“Entity”组件
+                //实在不应该命名为“CreateXXX” —— 名不副实
                 IEntity entity = m_EntityHelper.CreateEntity(entityInstance, entityGroup, userData);
                 if (entity == null)
                 {
                     throw new GameFrameworkException("Can not create entity in entity helper.");
                 }
 
+                //每个实体的“EntityInfo”的创建和回收，在回收时默认在“InternalHideEntity”将该entityInfo放入“m_RecycleQueue”中
+                //当在Update中当通过“entityGroup.UnspawnEntity”将该实体放入“m_InstancePool”中后
+                //此时则表示该“entityInfo”没有用了，可以直接使用“ReferencePool.Release”回收了
                 EntityInfo entityInfo = EntityInfo.Create(entity);
                 m_EntityInfos.Add(entityId, entityInfo);
                 entityInfo.Status = EntityStatus.WillInit;
@@ -1202,47 +1262,57 @@ namespace GameFramework.Entity
 
         private void InternalHideEntity(EntityInfo entityInfo, object userData)
         {
+            //第一步：隐藏所有子实体
             while (entityInfo.ChildEntityCount > 0)
             {
+                //“GetChildEntity”始终获取“附加实体集合”中的第一个
                 IEntity childEntity = entityInfo.GetChildEntity();
+                //本质上其实也可以直接调用内部的“InternalHideEntity”，但。。。
                 HideEntity(childEntity.Id, userData);
             }
 
+            //第二步：在开始“Hide”本实体前先检测自身是否已经处于“Hidden”状态，避免重复执行
             if (entityInfo.Status == EntityStatus.Hidden)
             {
                 return;
             }
 
             IEntity entity = entityInfo.Entity;
+            //第三步：解除掉本实体作为其他实体的“子实体”的连接关系
             DetachEntity(entity.Id, userData);
             entityInfo.Status = EntityStatus.WillHide;
+
+            //第四步：执行本实体自身的“隐藏逻辑”，并设置状态
             entity.OnHide(m_IsShutdown, userData);
             entityInfo.Status = EntityStatus.Hidden;
 
+            //第五步：将本身体所在的“EntityGroup”以及“m_EntityInfos”集合中均移除本实体相关的信息
             EntityGroup entityGroup = (EntityGroup)entity.EntityGroup;
             if (entityGroup == null)
             {
                 throw new GameFrameworkException("Entity group is invalid.");
             }
-
             entityGroup.RemoveEntity(entity);
+            //移除“m_EntityInfos”集合中该实体相关信息，并将其入“m_RecycleQueue”
+            //PS：此时该实体相关的“资源”等并没有被卸载(只有超出对象池上限时才会被直接卸载)
             if (!m_EntityInfos.Remove(entity.Id))
             {
                 throw new GameFrameworkException("Entity info is unmanaged.");
             }
+            m_RecycleQueue.Enqueue(entityInfo);
 
+            //第六步：执行委托(观察者模式相关回调)
             if (m_HideEntityCompleteEventHandler != null)
             {
                 HideEntityCompleteEventArgs hideEntityCompleteEventArgs = HideEntityCompleteEventArgs.Create(entity.Id, entity.EntityAssetName, entityGroup, userData);
                 m_HideEntityCompleteEventHandler(this, hideEntityCompleteEventArgs);
                 ReferencePool.Release(hideEntityCompleteEventArgs);
             }
-
-            m_RecycleQueue.Enqueue(entityInfo);
         }
 
         private void LoadAssetSuccessCallback(string entityAssetName, object entityAsset, float duration, object userData)
         {
+            //这个“ShowEntityInfo”真的有必要吗？？一共也就传递几个参数，关键也没几个地方用到，为什么不直接使用方法来传递呢！
             ShowEntityInfo showEntityInfo = (ShowEntityInfo)userData;
             if (showEntityInfo == null)
             {
@@ -1259,6 +1329,8 @@ namespace GameFramework.Entity
 
             m_EntitiesBeingLoaded.Remove(showEntityInfo.EntityId);
             EntityInstanceObject entityInstanceObject = EntityInstanceObject.Create(entityAssetName, entityAsset, m_EntityHelper.InstantiateEntity(entityAsset), m_EntityHelper);
+            //为什么要把“EntityInstanceObject”的创建逻辑写在这里，为什么不包含到“EntityGroup”的“Registerxxx"???
+            //这样写实在是太乱了！！！
             showEntityInfo.EntityGroup.RegisterEntityInstanceObject(entityInstanceObject, true);
 
             InternalShowEntity(showEntityInfo.EntityId, entityAssetName, showEntityInfo.EntityGroup, entityInstanceObject.Target, true, duration, showEntityInfo.UserData);

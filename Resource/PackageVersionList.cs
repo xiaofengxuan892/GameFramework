@@ -15,18 +15,20 @@ namespace GameFramework.Resource
     [StructLayout(LayoutKind.Auto)]
     public partial struct PackageVersionList
     {
+        //这里声明的四个变量其实就是用作“常数”的，没啥特别的。从以下逻辑来看，完全可以在“构造方法”中创建，而不用在这里做成“全局变量”增加“复杂性”
         private static readonly Asset[] EmptyAssetArray = new Asset[] { };
         private static readonly Resource[] EmptyResourceArray = new Resource[] { };
         private static readonly FileSystem[] EmptyFileSystemArray = new FileSystem[] { };
         private static readonly ResourceGroup[] EmptyResourceGroupArray = new ResourceGroup[] { };
 
+        //“单机模式版本资源列表”包含的参数
         private readonly bool m_IsValid;
         private readonly string m_ApplicableGameVersion;
         private readonly int m_InternalResourceVersion;
-        private readonly Asset[] m_Assets;
-        private readonly Resource[] m_Resources;
+        private readonly Asset[] m_Assets;  //所有的“Asset”
+        private readonly Resource[] m_Resources;  //所有的“AssetBundle”
         private readonly FileSystem[] m_FileSystems;
-        private readonly ResourceGroup[] m_ResourceGroups;
+        private readonly ResourceGroup[] m_ResourceGroups; //所有的“AssetBundle”分组的集合
 
         /// <summary>
         /// 初始化单机模式版本资源列表的新实例。
@@ -39,7 +41,7 @@ namespace GameFramework.Resource
         /// <param name="resourceGroups">包含的资源组集合。</param>
         public PackageVersionList(string applicableGameVersion, int internalResourceVersion, Asset[] assets, Resource[] resources, FileSystem[] fileSystems, ResourceGroup[] resourceGroups)
         {
-            m_IsValid = true;
+            m_IsValid = true; //当使用“构造方法”创建该类型实例对象时，默认“m_IsValid”变量为“true”
             m_ApplicableGameVersion = applicableGameVersion;
             m_InternalResourceVersion = internalResourceVersion;
             m_Assets = assets ?? EmptyAssetArray;

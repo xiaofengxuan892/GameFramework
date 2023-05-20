@@ -165,6 +165,7 @@ namespace GameFramework.ObjectPool
                 throw new GameFrameworkException(Utility.Text.Format("Target '{0}' is invalid.", name));
             }
 
+            //注意：这里的”name“是该”对象“的”prefab“的路径，并不是本对象自身的name
             m_Name = name ?? string.Empty;
             m_Target = target;
             m_Locked = locked;

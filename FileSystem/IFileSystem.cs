@@ -77,7 +77,7 @@ namespace GameFramework.FileSystem
         /// 读取指定文件。
         /// </summary>
         /// <param name="name">要读取的文件名称。</param>
-        /// <returns>存储读取文件内容的二进制流。</returns>
+        /// <returns>读取文件内容的二进制流。</returns>
         byte[] ReadFile(string name);
 
         /// <summary>

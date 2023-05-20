@@ -17,10 +17,16 @@ namespace GameFramework.Resource
         private sealed class ResourceGroup : IResourceGroup
         {
             private readonly string m_Name;
+
+            //所有ResourceGroup变量该参数的赋值都一样，均为ResourceManager.m_ResourceInfos。
+            //因此对于每个“ResourceGroup”变量本身来讲，并没有意义
             private readonly Dictionary<ResourceName, ResourceInfo> m_ResourceInfos;
+            //该参数才是真实代表每个Group中包含的Resource的列表
             private readonly HashSet<ResourceName> m_ResourceNames;
+
             private long m_TotalLength;
             private long m_TotalCompressedLength;
+
 
             /// <summary>
             /// 初始化资源组的新实例。
@@ -40,6 +46,7 @@ namespace GameFramework.Resource
                 }
 
                 m_Name = name;
+                //所有ResourceGroup变量该参数的赋值都一样，即为“ResourceManager.m_ResourceGroups”，因此不具备任何意义
                 m_ResourceInfos = resourceInfos;
                 m_ResourceNames = new HashSet<ResourceName>();
             }
@@ -85,6 +92,7 @@ namespace GameFramework.Resource
                 get
                 {
                     int readyCount = 0;
+                    //有必要用“m_ResourceNames”吗？直接遍历“m_ResourceInfos”集合不就行了！？？
                     foreach (ResourceName resourceName in m_ResourceNames)
                     {
                         ResourceInfo resourceInfo = null;
@@ -259,6 +267,7 @@ namespace GameFramework.Resource
             /// <param name="compressedLength">资源压缩后的大小。</param>
             public void AddResource(ResourceName resourceName, int length, int compressedLength)
             {
+                //“m_ResourceNames”实际代表本ResourceGroup下所有的Resources(本类型中的“m_ResourceInfos“参数没有任何意义)
                 m_ResourceNames.Add(resourceName);
                 m_TotalLength += length;
                 m_TotalCompressedLength += compressedLength;

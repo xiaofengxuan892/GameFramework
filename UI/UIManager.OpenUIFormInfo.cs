@@ -56,6 +56,7 @@ namespace GameFramework.UI
                 }
             }
 
+            //舍弃构造方法，而使用自定义的“Create”方法
             public static OpenUIFormInfo Create(int serialId, UIGroup uiGroup, bool pauseCoveredUIForm, object userData)
             {
                 OpenUIFormInfo openUIFormInfo = ReferencePool.Acquire<OpenUIFormInfo>();

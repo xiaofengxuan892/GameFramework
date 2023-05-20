@@ -106,12 +106,14 @@ namespace GameFramework
                     }
                 }
 
+                //如果“m_Rererences”队列中没有“未使用的引用”，则创建新的“引用对象”，此时需要“递增m_AddReferenceCount”
                 m_AddReferenceCount++;
                 return new T();
             }
 
             public IReference Acquire()
             {
+                //TODO: “获取的”不就是“使用中的”，为什么这里要分成两个参数？？
                 m_UsingReferenceCount++;
                 m_AcquireReferenceCount++;
                 lock (m_References)

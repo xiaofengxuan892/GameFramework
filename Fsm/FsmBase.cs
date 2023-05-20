@@ -10,7 +10,7 @@ using System;
 namespace GameFramework.Fsm
 {
     /// <summary>
-    /// 有限状态机基类。
+    /// 有限状态机基类
     /// </summary>
     public abstract class FsmBase
     {
@@ -27,6 +27,53 @@ namespace GameFramework.Fsm
             m_Name = string.Empty;
         }
 
+        /// <summary>
+        /// 有限状态机轮询。
+        /// </summary>
+        /// <param name="elapseSeconds">逻辑流逝时间，以秒为单位。</param>
+        /// <param name="realElapseSeconds">当前已流逝时间，以秒为单位。</param>
+        internal abstract void Update(float elapseSeconds, float realElapseSeconds);
+
+        /// <summary>
+        /// 关闭并清理有限状态机。
+        /// </summary>
+        internal abstract void Shutdown();
+
+        #region 部分重要属性
+        /// <summary>
+        /// 获取有限状态机是否正在运行。
+        /// </summary>
+        public abstract bool IsRunning
+        {
+            get;
+        }
+
+        /// <summary>
+        /// 获取有限状态机是否被销毁。
+        /// </summary>
+        public abstract bool IsDestroyed
+        {
+            get;
+        }
+
+        /// <summary>
+        /// 获取当前有限状态机状态名称。
+        /// </summary>
+        public abstract string CurrentStateName
+        {
+            get;
+        }
+
+        /// <summary>
+        /// 获取当前有限状态机状态持续时间。
+        /// </summary>
+        public abstract float CurrentStateTime
+        {
+            get;
+        }
+        #endregion
+
+        #region 其他属性
         /// <summary>
         /// 获取有限状态机名称。
         /// </summary>
@@ -68,49 +115,6 @@ namespace GameFramework.Fsm
         {
             get;
         }
-
-        /// <summary>
-        /// 获取有限状态机是否正在运行。
-        /// </summary>
-        public abstract bool IsRunning
-        {
-            get;
-        }
-
-        /// <summary>
-        /// 获取有限状态机是否被销毁。
-        /// </summary>
-        public abstract bool IsDestroyed
-        {
-            get;
-        }
-
-        /// <summary>
-        /// 获取当前有限状态机状态名称。
-        /// </summary>
-        public abstract string CurrentStateName
-        {
-            get;
-        }
-
-        /// <summary>
-        /// 获取当前有限状态机状态持续时间。
-        /// </summary>
-        public abstract float CurrentStateTime
-        {
-            get;
-        }
-
-        /// <summary>
-        /// 有限状态机轮询。
-        /// </summary>
-        /// <param name="elapseSeconds">逻辑流逝时间，以秒为单位。</param>
-        /// <param name="realElapseSeconds">当前已流逝时间，以秒为单位。</param>
-        internal abstract void Update(float elapseSeconds, float realElapseSeconds);
-
-        /// <summary>
-        /// 关闭并清理有限状态机。
-        /// </summary>
-        internal abstract void Shutdown();
+        #endregion
     }
 }

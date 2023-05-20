@@ -145,6 +145,7 @@ namespace GameFramework.Setting
                 throw new GameFrameworkException("Setting name is invalid.");
             }
 
+            //根据当前设置的”SettingHelper“类型执行相应的”xxHelper“，如”DefaultSettingHelper“或”PlayePrefsSettingHelper“
             return m_SettingHelper.HasSetting(settingName);
         }
 

@@ -57,6 +57,7 @@ namespace GameFramework.ObjectPool
 
         /// <summary>
         /// 获取对象池对象类型。
+        /// PS：这命名也是垃圾，这明显是“对象池的类型”，怎么能用“Object + Type”来命名？
         /// </summary>
         public abstract Type ObjectType
         {

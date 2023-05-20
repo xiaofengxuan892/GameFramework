@@ -63,6 +63,10 @@ namespace GameFramework
 
             /// <summary>
             /// 计算二进制流的 CRC32。
+            /// 注意：非常重要的一点
+            /// 该方法不仅可以计算指定stream的HashCode，并且如果设置了该stream的起始位置”Position“，
+            /// 还可以计算出从该”起始位置position“到”stream的末尾“这一段数据的HashCode
+            /// 如果没有设置stream起始position，则默认"stream.position = 0"
             /// </summary>
             /// <param name="stream">指定的二进制流。</param>
             /// <returns>计算后的 CRC32。</returns>

@@ -15,16 +15,33 @@ namespace GameFramework.Download
     /// </summary>
     internal sealed partial class DownloadManager : GameFrameworkModule, IDownloadManager
     {
+        private readonly TaskPool<DownloadTask> m_TaskPool;
+
+        //fileStream中缓存了指定大小的数据后，则将其存储到本地文件介质中
+        private int m_FlushSize;
         private const int OneMegaBytes = 1024 * 1024;
 
-        private readonly TaskPool<DownloadTask> m_TaskPool;
+        private float m_Timeout;   //每个任务“距离上次进度更新后”最长的持续时间，若超出该时间依然没有进度更新，则代表“超时”
+
         private readonly DownloadCounter m_DownloadCounter;
-        private int m_FlushSize;
-        private float m_Timeout;
+
         private EventHandler<DownloadStartEventArgs> m_DownloadStartEventHandler;
         private EventHandler<DownloadUpdateEventArgs> m_DownloadUpdateEventHandler;
         private EventHandler<DownloadSuccessEventArgs> m_DownloadSuccessEventHandler;
         private EventHandler<DownloadFailureEventArgs> m_DownloadFailureEventHandler;
+
+        #region 框架固定方法
+        /// <summary>
+        /// 获取游戏框架模块优先级。
+        /// </summary>
+        /// <remarks>优先级较高的模块会优先轮询，并且关闭操作会后进行。</remarks>
+        internal override int Priority
+        {
+            get
+            {
+                return 5;
+            }
+        }
 
         /// <summary>
         /// 初始化下载管理器的新实例。
@@ -42,17 +59,175 @@ namespace GameFramework.Download
         }
 
         /// <summary>
-        /// 获取游戏框架模块优先级。
+        /// 关闭并清理下载管理器。
         /// </summary>
-        /// <remarks>优先级较高的模块会优先轮询，并且关闭操作会后进行。</remarks>
-        internal override int Priority
+        internal override void Shutdown()
         {
-            get
+            m_TaskPool.Shutdown();
+            m_DownloadCounter.Shutdown();
+        }
+
+        #endregion
+
+        #region 核心方法1：添加“DownloadAgent”，“DownloadTask”，并在“Update轮询”中驱动
+        /// <summary>
+        /// 通过添加“TaskAgentHelper”来为“任务池”添加“TaskAgent”
+        /// </summary>
+        /// <param name="downloadAgentHelper">要增加的下载代理辅助器。</param>
+        public void AddDownloadAgentHelper(IDownloadAgentHelper downloadAgentHelper)
+        {
+            DownloadAgent agent = new DownloadAgent(downloadAgentHelper);
+            agent.DownloadAgentStart += OnDownloadAgentStart;
+            agent.DownloadAgentUpdate += OnDownloadAgentUpdate;
+            agent.DownloadAgentSuccess += OnDownloadAgentSuccess;
+            agent.DownloadAgentFailure += OnDownloadAgentFailure;
+
+            m_TaskPool.AddAgent(agent);
+        }
+
+        /// <summary>
+        /// 增加下载任务(这傻逼的命名不是应该叫“AddDownloadTask”吗？)
+        /// </summary>
+        /// <param name="downloadPath">下载后存放路径。</param>
+        /// <param name="downloadUri">原始下载地址。</param>
+        /// <param name="tag">下载任务的标签。</param>
+        /// <param name="priority">下载任务的优先级。</param>
+        /// <param name="userData">用户自定义数据。</param>
+        /// <returns>新增下载任务的序列编号。</returns>
+        public int AddDownload(string downloadPath, string downloadUri, string tag, int priority, object userData)
+        {
+            if (string.IsNullOrEmpty(downloadPath))
             {
-                return 5;
+                throw new GameFrameworkException("Download path is invalid.");
+            }
+
+            if (string.IsNullOrEmpty(downloadUri))
+            {
+                throw new GameFrameworkException("Download uri is invalid.");
+            }
+
+            if (TotalAgentCount <= 0)
+            {
+                throw new GameFrameworkException("You must add download agent first.");
+            }
+
+            DownloadTask downloadTask = DownloadTask.Create(downloadPath, downloadUri, tag, priority, m_FlushSize, m_Timeout, userData);
+            m_TaskPool.AddTask(downloadTask);
+            return downloadTask.SerialId;
+        }
+
+        /// <summary>
+        /// 下载管理器轮询。
+        /// </summary>
+        /// <param name="elapseSeconds">逻辑流逝时间，以秒为单位。</param>
+        /// <param name="realElapseSeconds">真实流逝时间，以秒为单位。</param>
+        internal override void Update(float elapseSeconds, float realElapseSeconds)
+        {
+            //任务池“轮询更新”
+            m_TaskPool.Update(elapseSeconds, realElapseSeconds);
+            m_DownloadCounter.Update(elapseSeconds, realElapseSeconds);
+        }
+
+        #endregion
+
+        #region 核心方法2：跟“DownloadAgent”绑定的委托，每个“DownloadAgent”只会在创建时注册一次即可
+        //PS：这些委托的方法体中发出的事件才是真正的通知外部的各个业务逻辑，每个“DownloadAgent”中的“DownloadAgentStart/Update/Success/Failure”是“Download系统”需要用到的“委托”
+        private void OnDownloadAgentStart(DownloadAgent sender)
+        {
+            if (m_DownloadStartEventHandler != null)
+            {
+                DownloadStartEventArgs downloadStartEventArgs = DownloadStartEventArgs.Create(sender.Task.SerialId, sender.Task.DownloadPath, sender.Task.DownloadUri, sender.CurrentLength, sender.Task.UserData);
+                m_DownloadStartEventHandler(this, downloadStartEventArgs);
+                ReferencePool.Release(downloadStartEventArgs);
             }
         }
 
+        private void OnDownloadAgentUpdate(DownloadAgent sender, int deltaLength)
+        {
+            //这里的“deltaLength”指的是“DownloadHandler.ReceiveData”中“从服务器传递过来的bytes数据大小”
+            m_DownloadCounter.RecordDeltaLength(deltaLength);  //累计每次从“DownloadHandler.ReceiveData”中传递过来的bytes数据
+            if (m_DownloadUpdateEventHandler != null)
+            {
+                DownloadUpdateEventArgs downloadUpdateEventArgs = DownloadUpdateEventArgs.Create(sender.Task.SerialId, sender.Task.DownloadPath, sender.Task.DownloadUri, sender.CurrentLength, sender.Task.UserData);
+                m_DownloadUpdateEventHandler(this, downloadUpdateEventArgs);
+                ReferencePool.Release(downloadUpdateEventArgs);
+            }
+        }
+
+        private void OnDownloadAgentSuccess(DownloadAgent sender, long length)
+        {
+            if (m_DownloadSuccessEventHandler != null)
+            {
+                DownloadSuccessEventArgs downloadSuccessEventArgs = DownloadSuccessEventArgs.Create(sender.Task.SerialId, sender.Task.DownloadPath, sender.Task.DownloadUri, sender.CurrentLength, sender.Task.UserData);
+                m_DownloadSuccessEventHandler(this, downloadSuccessEventArgs);
+                ReferencePool.Release(downloadSuccessEventArgs);
+            }
+        }
+
+        private void OnDownloadAgentFailure(DownloadAgent sender, string errorMessage)
+        {
+            if (m_DownloadFailureEventHandler != null)
+            {
+                DownloadFailureEventArgs downloadFailureEventArgs = DownloadFailureEventArgs.Create(sender.Task.SerialId, sender.Task.DownloadPath, sender.Task.DownloadUri, errorMessage, sender.Task.UserData);
+                m_DownloadFailureEventHandler(this, downloadFailureEventArgs);
+                ReferencePool.Release(downloadFailureEventArgs);
+            }
+        }
+
+        #endregion
+
+        #region 工具方法
+        /// <summary>
+        /// 根据下载任务的序列编号获取下载任务的信息。
+        /// </summary>
+        /// <param name="serialId">要获取信息的下载任务的序列编号。</param>
+        /// <returns>下载任务的信息。</returns>
+        public TaskInfo GetDownloadInfo(int serialId)
+        {
+            return m_TaskPool.GetTaskInfo(serialId);
+        }
+
+        /// <summary>
+        /// 根据下载任务的标签获取下载任务的信息。
+        /// </summary>
+        /// <param name="tag">要获取信息的下载任务的标签。</param>
+        /// <returns>下载任务的信息。</returns>
+        public TaskInfo[] GetDownloadInfos(string tag)
+        {
+            return m_TaskPool.GetTaskInfos(tag);
+        }
+
+        /// <summary>
+        /// 根据下载任务的标签获取下载任务的信息。
+        /// </summary>
+        /// <param name="tag">要获取信息的下载任务的标签。</param>
+        /// <param name="results">下载任务的信息。</param>
+        public void GetDownloadInfos(string tag, List<TaskInfo> results)
+        {
+            m_TaskPool.GetTaskInfos(tag, results);
+        }
+
+        /// <summary>
+        /// 获取所有下载任务的信息。
+        /// </summary>
+        /// <returns>所有下载任务的信息。</returns>
+        public TaskInfo[] GetAllDownloadInfos()
+        {
+            return m_TaskPool.GetAllTaskInfos();
+        }
+
+        /// <summary>
+        /// 获取所有下载任务的信息。
+        /// </summary>
+        /// <param name="results">所有下载任务的信息。</param>
+        public void GetAllDownloadInfos(List<TaskInfo> results)
+        {
+            m_TaskPool.GetAllTaskInfos(results);
+        }
+
+        #endregion
+
+        #region 属性
         /// <summary>
         /// 获取或设置下载是否被暂停。
         /// </summary>
@@ -153,6 +328,9 @@ namespace GameFramework.Download
             }
         }
 
+        #endregion
+
+        #region 提供给外部的监听事件
         /// <summary>
         /// 下载开始事件。
         /// </summary>
@@ -213,89 +391,9 @@ namespace GameFramework.Download
             }
         }
 
-        /// <summary>
-        /// 下载管理器轮询。
-        /// </summary>
-        /// <param name="elapseSeconds">逻辑流逝时间，以秒为单位。</param>
-        /// <param name="realElapseSeconds">真实流逝时间，以秒为单位。</param>
-        internal override void Update(float elapseSeconds, float realElapseSeconds)
-        {
-            m_TaskPool.Update(elapseSeconds, realElapseSeconds);
-            m_DownloadCounter.Update(elapseSeconds, realElapseSeconds);
-        }
+        #endregion
 
-        /// <summary>
-        /// 关闭并清理下载管理器。
-        /// </summary>
-        internal override void Shutdown()
-        {
-            m_TaskPool.Shutdown();
-            m_DownloadCounter.Shutdown();
-        }
-
-        /// <summary>
-        /// 增加下载代理辅助器。
-        /// </summary>
-        /// <param name="downloadAgentHelper">要增加的下载代理辅助器。</param>
-        public void AddDownloadAgentHelper(IDownloadAgentHelper downloadAgentHelper)
-        {
-            DownloadAgent agent = new DownloadAgent(downloadAgentHelper);
-            agent.DownloadAgentStart += OnDownloadAgentStart;
-            agent.DownloadAgentUpdate += OnDownloadAgentUpdate;
-            agent.DownloadAgentSuccess += OnDownloadAgentSuccess;
-            agent.DownloadAgentFailure += OnDownloadAgentFailure;
-
-            m_TaskPool.AddAgent(agent);
-        }
-
-        /// <summary>
-        /// 根据下载任务的序列编号获取下载任务的信息。
-        /// </summary>
-        /// <param name="serialId">要获取信息的下载任务的序列编号。</param>
-        /// <returns>下载任务的信息。</returns>
-        public TaskInfo GetDownloadInfo(int serialId)
-        {
-            return m_TaskPool.GetTaskInfo(serialId);
-        }
-
-        /// <summary>
-        /// 根据下载任务的标签获取下载任务的信息。
-        /// </summary>
-        /// <param name="tag">要获取信息的下载任务的标签。</param>
-        /// <returns>下载任务的信息。</returns>
-        public TaskInfo[] GetDownloadInfos(string tag)
-        {
-            return m_TaskPool.GetTaskInfos(tag);
-        }
-
-        /// <summary>
-        /// 根据下载任务的标签获取下载任务的信息。
-        /// </summary>
-        /// <param name="tag">要获取信息的下载任务的标签。</param>
-        /// <param name="results">下载任务的信息。</param>
-        public void GetDownloadInfos(string tag, List<TaskInfo> results)
-        {
-            m_TaskPool.GetTaskInfos(tag, results);
-        }
-
-        /// <summary>
-        /// 获取所有下载任务的信息。
-        /// </summary>
-        /// <returns>所有下载任务的信息。</returns>
-        public TaskInfo[] GetAllDownloadInfos()
-        {
-            return m_TaskPool.GetAllTaskInfos();
-        }
-
-        /// <summary>
-        /// 获取所有下载任务的信息。
-        /// </summary>
-        /// <param name="results">所有下载任务的信息。</param>
-        public void GetAllDownloadInfos(List<TaskInfo> results)
-        {
-            m_TaskPool.GetAllTaskInfos(results);
-        }
-
+        #region 垃圾重载方法
         /// <summary>
         /// 增加下载任务。
         /// </summary>
@@ -383,37 +481,6 @@ namespace GameFramework.Download
         }
 
         /// <summary>
-        /// 增加下载任务。
-        /// </summary>
-        /// <param name="downloadPath">下载后存放路径。</param>
-        /// <param name="downloadUri">原始下载地址。</param>
-        /// <param name="tag">下载任务的标签。</param>
-        /// <param name="priority">下载任务的优先级。</param>
-        /// <param name="userData">用户自定义数据。</param>
-        /// <returns>新增下载任务的序列编号。</returns>
-        public int AddDownload(string downloadPath, string downloadUri, string tag, int priority, object userData)
-        {
-            if (string.IsNullOrEmpty(downloadPath))
-            {
-                throw new GameFrameworkException("Download path is invalid.");
-            }
-
-            if (string.IsNullOrEmpty(downloadUri))
-            {
-                throw new GameFrameworkException("Download uri is invalid.");
-            }
-
-            if (TotalAgentCount <= 0)
-            {
-                throw new GameFrameworkException("You must add download agent first.");
-            }
-
-            DownloadTask downloadTask = DownloadTask.Create(downloadPath, downloadUri, tag, priority, m_FlushSize, m_Timeout, userData);
-            m_TaskPool.AddTask(downloadTask);
-            return downloadTask.SerialId;
-        }
-
-        /// <summary>
         /// 根据下载任务的序列编号移除下载任务。
         /// </summary>
         /// <param name="serialId">要移除下载任务的序列编号。</param>
@@ -442,45 +509,7 @@ namespace GameFramework.Download
             return m_TaskPool.RemoveAllTasks();
         }
 
-        private void OnDownloadAgentStart(DownloadAgent sender)
-        {
-            if (m_DownloadStartEventHandler != null)
-            {
-                DownloadStartEventArgs downloadStartEventArgs = DownloadStartEventArgs.Create(sender.Task.SerialId, sender.Task.DownloadPath, sender.Task.DownloadUri, sender.CurrentLength, sender.Task.UserData);
-                m_DownloadStartEventHandler(this, downloadStartEventArgs);
-                ReferencePool.Release(downloadStartEventArgs);
-            }
-        }
+        #endregion
 
-        private void OnDownloadAgentUpdate(DownloadAgent sender, int deltaLength)
-        {
-            m_DownloadCounter.RecordDeltaLength(deltaLength);
-            if (m_DownloadUpdateEventHandler != null)
-            {
-                DownloadUpdateEventArgs downloadUpdateEventArgs = DownloadUpdateEventArgs.Create(sender.Task.SerialId, sender.Task.DownloadPath, sender.Task.DownloadUri, sender.CurrentLength, sender.Task.UserData);
-                m_DownloadUpdateEventHandler(this, downloadUpdateEventArgs);
-                ReferencePool.Release(downloadUpdateEventArgs);
-            }
-        }
-
-        private void OnDownloadAgentSuccess(DownloadAgent sender, long length)
-        {
-            if (m_DownloadSuccessEventHandler != null)
-            {
-                DownloadSuccessEventArgs downloadSuccessEventArgs = DownloadSuccessEventArgs.Create(sender.Task.SerialId, sender.Task.DownloadPath, sender.Task.DownloadUri, sender.CurrentLength, sender.Task.UserData);
-                m_DownloadSuccessEventHandler(this, downloadSuccessEventArgs);
-                ReferencePool.Release(downloadSuccessEventArgs);
-            }
-        }
-
-        private void OnDownloadAgentFailure(DownloadAgent sender, string errorMessage)
-        {
-            if (m_DownloadFailureEventHandler != null)
-            {
-                DownloadFailureEventArgs downloadFailureEventArgs = DownloadFailureEventArgs.Create(sender.Task.SerialId, sender.Task.DownloadPath, sender.Task.DownloadUri, errorMessage, sender.Task.UserData);
-                m_DownloadFailureEventHandler(this, downloadFailureEventArgs);
-                ReferencePool.Release(downloadFailureEventArgs);
-            }
-        }
     }
 }

@@ -16,6 +16,7 @@ namespace GameFramework.Config
     /// </summary>
     internal sealed partial class ConfigManager : GameFrameworkModule, IConfigManager
     {
+        //存储配置数据的集合“m_ConfigDatas”其实可以效仿“SettingManager”将其转移到“SettingHelper”中，这里只提供访问接口即可
         private readonly Dictionary<string, ConfigData> m_ConfigDatas;
         private readonly DataProvider<IConfigManager> m_DataProvider;
         private IConfigHelper m_ConfigHelper;
@@ -171,12 +172,14 @@ namespace GameFramework.Config
 
         /// <summary>
         /// 释放缓存的二进制流。
+        /// TODO: 为什么这里不用“m_DataProvider”? 这里是要释放所有的“ConfigManager”的“DataProvider”吗？
         /// </summary>
         public void FreeCachedBytes()
         {
             DataProvider<IConfigManager>.FreeCachedBytes();
         }
 
+        #region 通过“m_DataProvider”变量实现数据的读取及解析过程
         /// <summary>
         /// 读取全局配置。
         /// </summary>
@@ -198,6 +201,7 @@ namespace GameFramework.Config
 
         /// <summary>
         /// 读取全局配置。
+        /// PS: 由于"ConfigManager"实现了接口“IConfigManager”(该接口继承了IDataProvider)，因此包含“ReadData”方法
         /// </summary>
         /// <param name="configAssetName">全局配置资源名称。</param>
         /// <param name="userData">用户自定义数据。</param>
@@ -283,7 +287,9 @@ namespace GameFramework.Config
         {
             return m_DataProvider.ParseData(configBytes, startIndex, length, userData);
         }
+        #endregion
 
+        #region 将读取到的数据以“ConfigData”的形式存入字典集合中
         /// <summary>
         /// 检查是否存在指定全局配置项。
         /// </summary>
@@ -291,8 +297,96 @@ namespace GameFramework.Config
         /// <returns>指定的全局配置项是否存在。</returns>
         public bool HasConfig(string configName)
         {
+            //"Struct"类型的数据包含有属性“HasValue, Value”，可以替代条件判断中的“null”。也是一种书写形式
             return GetConfigData(configName).HasValue;
         }
+
+        private ConfigData? GetConfigData(string configName)
+        {
+            if (string.IsNullOrEmpty(configName))
+            {
+                throw new GameFrameworkException("Config name is invalid.");
+            }
+
+            ConfigData configData = default(ConfigData);
+            if (m_ConfigDatas.TryGetValue(configName, out configData))
+            {
+                return configData;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 增加指定全局配置项。
+        /// </summary>
+        /// <param name="configName">要增加全局配置项的名称。</param>
+        /// <param name="configValue">全局配置项的值。</param>
+        /// <returns>是否增加全局配置项成功。</returns>
+        public bool AddConfig(string configName, string configValue)
+        {
+            //使用如下“TryParse”匹配，如果数据本身无法正常转换，则保留“out”参数的默认值，并不会置为null或其他
+            bool boolValue = false;
+            bool.TryParse(configValue, out boolValue);
+
+            int intValue = 0;
+            int.TryParse(configValue, out intValue);
+
+            float floatValue = 0f;
+            float.TryParse(configValue, out floatValue);
+
+            //为什么要使用“ConfigData”结构来存储数据？
+            //解答：1.从代码框架底层的角度来看，由于并不知道数据到底是哪种类型，因此只能通过包含所有类型的“统一结构”来存储
+            //    2.基于“TryParse”的特性，只有在数据类型匹配时才能得到正确的数据，受助于此，“统一结构”得以施行
+            //    3.从策划配置的角度来看，“ConfigData”只包含有限的“int, float, string, bool”四种类型
+            //注意：在“GetString/GetInt/GetBool”时需要首先已知策划配置的数据的类型然后才能选择相应的方法
+            return AddConfig(configName, boolValue, intValue, floatValue, configValue);
+        }
+
+        /// <summary>
+        /// 增加指定全局配置项。
+        /// </summary>
+        /// <param name="configName">要增加全局配置项的名称。</param>
+        /// <param name="boolValue">全局配置项布尔值。</param>
+        /// <param name="intValue">全局配置项整数值。</param>
+        /// <param name="floatValue">全局配置项浮点数值。</param>
+        /// <param name="stringValue">全局配置项字符串值。</param>
+        /// <returns>是否增加全局配置项成功。</returns>
+        public bool AddConfig(string configName, bool boolValue, int intValue, float floatValue, string stringValue)
+        {
+            if (HasConfig(configName))
+            {
+                return false;
+            }
+
+            m_ConfigDatas.Add(configName, new ConfigData(boolValue, intValue, floatValue, stringValue));
+            return true;
+        }
+
+        /// <summary>
+        /// 移除指定全局配置项。
+        /// </summary>
+        /// <param name="configName">要移除全局配置项的名称。</param>
+        public bool RemoveConfig(string configName)
+        {
+            if (!HasConfig(configName))
+            {
+                return false;
+            }
+
+            return m_ConfigDatas.Remove(configName);
+        }
+
+        /// <summary>
+        /// 清空所有全局配置项。
+        /// </summary>
+        public void RemoveAllConfigs()
+        {
+            m_ConfigDatas.Clear();
+        }
+        #endregion
+
+        #region 根据configName，即策划配置的key，查找对应的value
 
         /// <summary>
         /// 从指定全局配置项中读取布尔值。
@@ -406,82 +500,6 @@ namespace GameFramework.Config
             return configData.HasValue ? configData.Value.StringValue : defaultValue;
         }
 
-        /// <summary>
-        /// 增加指定全局配置项。
-        /// </summary>
-        /// <param name="configName">要增加全局配置项的名称。</param>
-        /// <param name="configValue">全局配置项的值。</param>
-        /// <returns>是否增加全局配置项成功。</returns>
-        public bool AddConfig(string configName, string configValue)
-        {
-            bool boolValue = false;
-            bool.TryParse(configValue, out boolValue);
-
-            int intValue = 0;
-            int.TryParse(configValue, out intValue);
-
-            float floatValue = 0f;
-            float.TryParse(configValue, out floatValue);
-
-            return AddConfig(configName, boolValue, intValue, floatValue, configValue);
-        }
-
-        /// <summary>
-        /// 增加指定全局配置项。
-        /// </summary>
-        /// <param name="configName">要增加全局配置项的名称。</param>
-        /// <param name="boolValue">全局配置项布尔值。</param>
-        /// <param name="intValue">全局配置项整数值。</param>
-        /// <param name="floatValue">全局配置项浮点数值。</param>
-        /// <param name="stringValue">全局配置项字符串值。</param>
-        /// <returns>是否增加全局配置项成功。</returns>
-        public bool AddConfig(string configName, bool boolValue, int intValue, float floatValue, string stringValue)
-        {
-            if (HasConfig(configName))
-            {
-                return false;
-            }
-
-            m_ConfigDatas.Add(configName, new ConfigData(boolValue, intValue, floatValue, stringValue));
-            return true;
-        }
-
-        /// <summary>
-        /// 移除指定全局配置项。
-        /// </summary>
-        /// <param name="configName">要移除全局配置项的名称。</param>
-        public bool RemoveConfig(string configName)
-        {
-            if (!HasConfig(configName))
-            {
-                return false;
-            }
-
-            return m_ConfigDatas.Remove(configName);
-        }
-
-        /// <summary>
-        /// 清空所有全局配置项。
-        /// </summary>
-        public void RemoveAllConfigs()
-        {
-            m_ConfigDatas.Clear();
-        }
-
-        private ConfigData? GetConfigData(string configName)
-        {
-            if (string.IsNullOrEmpty(configName))
-            {
-                throw new GameFrameworkException("Config name is invalid.");
-            }
-
-            ConfigData configData = default(ConfigData);
-            if (m_ConfigDatas.TryGetValue(configName, out configData))
-            {
-                return configData;
-            }
-
-            return null;
-        }
+        #endregion
     }
 }

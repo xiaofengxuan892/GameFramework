@@ -15,6 +15,7 @@ namespace GameFramework.Resource
         {
             /// <summary>
             /// 资源应用信息。
+            /// PS：资源包中是包含各个Resource的实际信息的，相当于本框架中的”FileSystem“模块打包出来的文件，里面是包含真实Resource数据的
             /// </summary>
             [StructLayout(LayoutKind.Auto)]
             private struct ApplyInfo
@@ -22,11 +23,15 @@ namespace GameFramework.Resource
                 private readonly ResourceName m_ResourceName;
                 private readonly string m_FileSystemName;
                 private readonly LoadType m_LoadType;
+                //m_Offset：该资源在资源包中的数据偏移起始位置
+                //【m_Offset, m_Offset + m_Length】则为该Resource在”资源包“中的实际位置
                 private readonly long m_Offset;
                 private readonly int m_Length;
+
                 private readonly int m_HashCode;
                 private readonly int m_CompressedLength;
                 private readonly int m_CompressedHashCode;
+                //该资源从”资源包“中读取出来后存储到”读写区“中的路径
                 private readonly string m_ResourcePath;
 
                 /// <summary>

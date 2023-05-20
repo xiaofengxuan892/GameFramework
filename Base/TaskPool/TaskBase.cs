@@ -37,7 +37,37 @@ namespace GameFramework
         }
 
         /// <summary>
+        /// 初始化任务基类。
+        /// </summary>
+        /// <param name="serialId">任务的序列编号。</param>
+        /// <param name="tag">任务的标签。</param>
+        /// <param name="priority">任务的优先级。</param>
+        /// <param name="userData">任务的用户自定义数据。</param>
+        internal void Initialize(int serialId, string tag, int priority, object userData)
+        {
+            m_SerialId = serialId;
+            m_Tag = tag;
+            m_Priority = priority;
+            m_UserData = userData;
+            m_Done = false;
+        }
+
+        /// <summary>
+        /// 清理任务基类。
+        /// </summary>
+        public virtual void Clear()
+        {
+            m_SerialId = 0;
+            m_Tag = null;
+            m_Priority = DefaultPriority;
+            m_UserData = null;
+            m_Done = false;
+        }
+
+        #region 属性
+        /// <summary>
         /// 获取任务的序列编号。
+        /// PS：该编号会在创建任务的”Create“方法中为其赋值，不允许外部赋值，因此只提供”Get“方法
         /// </summary>
         public int SerialId
         {
@@ -97,6 +127,7 @@ namespace GameFramework
 
         /// <summary>
         /// 获取任务描述。
+        /// PS：应该是提供给扩展子类的，每个扩展子类的"Description"不同，分别代表各个”TaskBase“子类各自的区别
         /// </summary>
         public virtual string Description
         {
@@ -106,32 +137,6 @@ namespace GameFramework
             }
         }
 
-        /// <summary>
-        /// 初始化任务基类。
-        /// </summary>
-        /// <param name="serialId">任务的序列编号。</param>
-        /// <param name="tag">任务的标签。</param>
-        /// <param name="priority">任务的优先级。</param>
-        /// <param name="userData">任务的用户自定义数据。</param>
-        internal void Initialize(int serialId, string tag, int priority, object userData)
-        {
-            m_SerialId = serialId;
-            m_Tag = tag;
-            m_Priority = priority;
-            m_UserData = userData;
-            m_Done = false;
-        }
-
-        /// <summary>
-        /// 清理任务基类。
-        /// </summary>
-        public virtual void Clear()
-        {
-            m_SerialId = 0;
-            m_Tag = null;
-            m_Priority = DefaultPriority;
-            m_UserData = null;
-            m_Done = false;
-        }
+        #endregion
     }
 }

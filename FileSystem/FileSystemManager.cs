@@ -180,6 +180,7 @@ namespace GameFramework.FileSystem
 
         /// <summary>
         /// 加载文件系统。
+        /// PS：草泥马，这下面的逻辑明显就是“创建文件系统”啊！！！为什么命名是“LoadFileSytem”，而不是”CreateFileSystem“！！！
         /// </summary>
         /// <param name="fullPath">要加载的文件系统的完整路径。</param>
         /// <param name="access">要加载的文件系统的访问方式。</param>

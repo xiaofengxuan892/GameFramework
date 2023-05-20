@@ -225,6 +225,7 @@ namespace GameFramework
             Event eventNode = Event.Create(sender, e);
             lock (m_Events)
             {
+                //注意：为了保证多个事件发送的先后顺序，这里使用”队列Queue“，而非”栈Stack“作为存储元素的集合
                 m_Events.Enqueue(eventNode);
             }
         }

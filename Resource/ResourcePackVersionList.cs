@@ -18,8 +18,12 @@ namespace GameFramework.Resource
         private static readonly Resource[] EmptyResourceArray = new Resource[] { };
 
         private readonly bool m_IsValid;
+        //资源包文件中包含有该”ResourcePackVersionList“对象以及”真正的资源数据“
+        //”m_Offset“代表资源包文件中”实际资源数据“的起始偏移位置，
+        //【m_Offset, m_Offset + m_Length】区间即是”实际资源数据“
         private readonly int m_Offset;
         private readonly long m_Length;
+
         private readonly int m_HashCode;
         private readonly Resource[] m_Resources;
 

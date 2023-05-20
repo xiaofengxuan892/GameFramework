@@ -22,6 +22,8 @@ namespace GameFramework.Sound
             private int m_SerialId;
             private object m_SoundAsset;
             private DateTime m_SetSoundAssetTime;
+            //这两个参数实在是有点装逼，搞得这么不好理解。实际作用就是根据该"SoundGroup"的“mute”设定将其中的所有AudioSource
+            //全部设置为与目标一致。这“SoundAgent”的命名也是装逼十足，啥玩意
             private bool m_MuteInSoundGroup;
             private float m_VolumeInSoundGroup;
 

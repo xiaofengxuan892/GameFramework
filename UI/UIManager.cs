@@ -17,22 +17,264 @@ namespace GameFramework.UI
     /// </summary>
     internal sealed partial class UIManager : GameFrameworkModule, IUIManager
     {
-        private readonly Dictionary<string, UIGroup> m_UIGroups;
+        private IResourceManager m_ResourceManager;
+        private readonly LoadAssetCallbacks m_LoadAssetCallbacks;
+        //专用于“加载UI资源的过程中收到需要隐藏该UI的指令”，只需要在资源加载的回调中卸载该资源即可。
+        //故这里使用“m_Serial”标记该资源。所有一切在“加载UI资源的过程中并且在实例化UI对象之前有效”。
+        //如果该UI对象已经实例化成功，则这三个参数都没有任何作用了
         private readonly Dictionary<int, string> m_UIFormsBeingLoaded;
         private readonly HashSet<int> m_UIFormsToReleaseOnLoad;
-        private readonly Queue<IUIForm> m_RecycleQueue;
-        private readonly LoadAssetCallbacks m_LoadAssetCallbacks;
-        private IObjectPoolManager m_ObjectPoolManager;
-        private IResourceManager m_ResourceManager;
-        private IObjectPool<UIFormInstanceObject> m_InstancePool;
-        private IUIFormHelper m_UIFormHelper;
         private int m_Serial;
-        private bool m_IsShutdown;
+
+        //只要该“实体或UI被Hide”，则会将其放入本队列中。之后的回收逻辑由对象池执行
+        //PS:是否真的有必要-只要Hide该UI就将其放入“m_RecycleQueue”中在Update中回收？？如果短时间内快速切换UI显示和隐藏呢？？
+        private readonly Queue<IUIForm> m_RecycleQueue;
+
+        //通过对象池系统负责所有UI对象的“获取、回收、释放”
+        private IObjectPoolManager m_ObjectPoolManager;
+        private IObjectPool<UIFormInstanceObject> m_InstancePool;
+        private bool m_IsShutdown; //是否是由于“整个游戏关闭而CloseUI”还是“普通的关闭UI”
+
+        //分类管理所有的UI对象
+        private readonly Dictionary<string, UIGroup> m_UIGroups;
+        private IUIFormHelper m_UIFormHelper;
+
         private EventHandler<OpenUIFormSuccessEventArgs> m_OpenUIFormSuccessEventHandler;
         private EventHandler<OpenUIFormFailureEventArgs> m_OpenUIFormFailureEventHandler;
         private EventHandler<OpenUIFormUpdateEventArgs> m_OpenUIFormUpdateEventHandler;
         private EventHandler<OpenUIFormDependencyAssetEventArgs> m_OpenUIFormDependencyAssetEventHandler;
         private EventHandler<CloseUIFormCompleteEventArgs> m_CloseUIFormCompleteEventHandler;
+
+        #region 核心方法1：OpenUIForm, CloseUIForm, RefocusUIForm的关键方法
+        /// <summary>
+        /// 提供给外部用于打开界面的实际执行方法
+        /// </summary>
+        /// <param name="uiFormAssetName">界面资源名称。</param>
+        /// <param name="uiGroupName">界面组名称。</param>
+        /// <param name="priority">加载界面资源的优先级。</param>
+        /// <param name="pauseCoveredUIForm">是否暂停被覆盖的界面。</param>
+        /// <param name="userData">用户自定义数据。</param>
+        /// <returns>界面的序列编号。</returns>
+        public int OpenUIForm(string uiFormAssetName, string uiGroupName, int priority, bool pauseCoveredUIForm, object userData)
+        {
+            if (m_ResourceManager == null)
+            {
+                throw new GameFrameworkException("You must set resource manager first.");
+            }
+
+            if (m_UIFormHelper == null)
+            {
+                throw new GameFrameworkException("You must set UI form helper first.");
+            }
+
+            if (string.IsNullOrEmpty(uiFormAssetName))
+            {
+                throw new GameFrameworkException("UI form asset name is invalid.");
+            }
+
+            if (string.IsNullOrEmpty(uiGroupName))
+            {
+                throw new GameFrameworkException("UI group name is invalid.");
+            }
+
+            UIGroup uiGroup = (UIGroup)GetUIGroup(uiGroupName);
+            if (uiGroup == null)
+            {
+                throw new GameFrameworkException(Utility.Text.Format("UI group '{0}' is not exist.", uiGroupName));
+            }
+
+            //记录当前加载的UI资源文件编号，以防后续“加载中收到卸载的指令”需要卸载(该语句应该放在判断条件里，而不是外面)
+            int serialId = ++m_Serial;
+            //由于对象池中是以该prefab为标准来存放，所有该prefab生成的对象都放在同一集合“GameFrameworkLinkedListRange”中
+            UIFormInstanceObject uiFormInstanceObject = m_InstancePool.Spawn(uiFormAssetName);
+            if (uiFormInstanceObject == null)
+            {
+                m_UIFormsBeingLoaded.Add(serialId, uiFormAssetName);
+                //本UI模块中专属的“对象池m_InstancePool”可能已经将该UIForm销毁，但“资源模块”中每个Asset资源有其本身的“对象池释放间隔”，
+                //由于“UI模块”的对象池中，每个UIForm不能存在太长时间，但“资源模块”的“AssetPool”和“ResourcePool”中每个Asset和AB可能存在的时间较长(因为其只涉及到内存占用而已)
+                //所以在这种情况下，依然有可能直接就可以从内存中获取到该UIForm用到的“Asset”对象，然后根据该对象拆创建出可用的“UIForm”
+                m_ResourceManager.LoadAsset(uiFormAssetName, priority, m_LoadAssetCallbacks, OpenUIFormInfo.Create(serialId, uiGroup, pauseCoveredUIForm, userData));
+            }
+            else
+            {
+                InternalOpenUIForm(serialId, uiFormAssetName, uiGroup, uiFormInstanceObject.Target, pauseCoveredUIForm, false, 0f, userData);
+            }
+
+            return serialId;
+        }
+
+        private void InternalOpenUIForm(int serialId, string uiFormAssetName, UIGroup uiGroup, object uiFormInstance, bool pauseCoveredUIForm, bool isNewInstance, float duration, object userData)
+        {
+            try
+            {
+                IUIForm uiForm = m_UIFormHelper.CreateUIForm(uiFormInstance, uiGroup, userData);
+                if (uiForm == null)
+                {
+                    throw new GameFrameworkException("Can not create UI form in UI form helper.");
+                }
+
+                uiForm.OnInit(serialId, uiFormAssetName, uiGroup, pauseCoveredUIForm, isNewInstance, userData);
+                uiGroup.AddUIForm(uiForm);
+                uiForm.OnOpen(userData);
+                //由于本UIForm所属的“UIGroup”中“当前正在显示的集合中”的元素发生了改变，因此需要重新设置各个UIForm的“Canvas.SortingOrder”
+                uiGroup.Refresh();
+
+                if (m_OpenUIFormSuccessEventHandler != null)
+                {
+                    OpenUIFormSuccessEventArgs openUIFormSuccessEventArgs = OpenUIFormSuccessEventArgs.Create(uiForm, duration, userData);
+                    m_OpenUIFormSuccessEventHandler(this, openUIFormSuccessEventArgs);
+                    ReferencePool.Release(openUIFormSuccessEventArgs);
+                }
+            }
+            catch (Exception exception)
+            {
+                if (m_OpenUIFormFailureEventHandler != null)
+                {
+                    OpenUIFormFailureEventArgs openUIFormFailureEventArgs = OpenUIFormFailureEventArgs.Create(serialId, uiFormAssetName, uiGroup.Name, pauseCoveredUIForm, exception.ToString(), userData);
+                    m_OpenUIFormFailureEventHandler(this, openUIFormFailureEventArgs);
+                    ReferencePool.Release(openUIFormFailureEventArgs);
+                    return;
+                }
+
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// 根据该界面的SerialId关闭界面
+        /// </summary>
+        /// <param name="serialId">要关闭界面的序列编号。</param>
+        public void CloseUIForm(int serialId)
+        {
+            CloseUIForm(serialId, null);
+        }
+
+        /// <summary>
+        /// 关闭界面。
+        /// </summary>
+        /// <param name="serialId">要关闭界面的序列编号。</param>
+        /// <param name="userData">用户自定义数据。</param>
+        public void CloseUIForm(int serialId, object userData)
+        {
+            if (IsLoadingUIForm(serialId))
+            {
+                m_UIFormsToReleaseOnLoad.Add(serialId);
+                m_UIFormsBeingLoaded.Remove(serialId);
+                return;
+            }
+
+            IUIForm uiForm = GetUIForm(serialId);
+            if (uiForm == null)
+            {
+                throw new GameFrameworkException(Utility.Text.Format("Can not find UI form '{0}'.", serialId));
+            }
+
+            CloseUIForm(uiForm, userData);
+        }
+
+        /// <summary>
+        /// 根据该界面自身的UIForm来关闭界面
+        /// </summary>
+        /// <param name="uiForm">要关闭的界面。</param>
+        public void CloseUIForm(IUIForm uiForm)
+        {
+            CloseUIForm(uiForm, null);
+        }
+
+        /// <summary>
+        /// 关闭界面的正式流程步骤
+        /// </summary>
+        /// <param name="uiForm">要关闭的界面。</param>
+        /// <param name="userData">用户自定义数据。</param>
+        public void CloseUIForm(IUIForm uiForm, object userData)
+        {
+            if (uiForm == null)
+            {
+                throw new GameFrameworkException("UI form is invalid.");
+            }
+
+            UIGroup uiGroup = (UIGroup)uiForm.UIGroup;
+            if (uiGroup == null)
+            {
+                throw new GameFrameworkException("UI group is invalid.");
+            }
+
+            //第一步：由于每个UIGroup内部的”GameFrameworkLinkedList“只包含当前显示出来的UIForm，因此需要将该UIForm从本集合中移除
+            uiGroup.RemoveUIForm(uiForm);
+            //第二步：由各个UIForm自身来决定，在隐藏自身界面时需要执行的相关操作，如清空用到的某些数据 —— 这里是针对该UIForm的相关逻辑中用到的数据，而非界面中的各个控件的获取得到的参数对象
+            //注意：本步骤中已经使用”SetActive(false)“将该UIForm隐藏起来了
+            uiForm.OnClose(m_IsShutdown, userData);
+            //第三步：由于该”需要关闭的UIForm“已经从”GameFrameworkLinkedList“中移除了，并且该UIForm自身也已经被”SetActive(false)“，
+            //      所以直接遍历”xxLinkedList“集合设置本UIGroup下每个UIForm的”Canvas.SortingOrder“即可
+            //PS：由于”需要关闭的UIForm“已经”SetActive(false)“，因此这里重新刷新排序时完全不用考虑其影响
+            uiGroup.Refresh();
+
+            if (m_CloseUIFormCompleteEventHandler != null)
+            {
+                CloseUIFormCompleteEventArgs closeUIFormCompleteEventArgs = CloseUIFormCompleteEventArgs.Create(uiForm.SerialId, uiForm.UIFormAssetName, uiGroup, userData);
+                m_CloseUIFormCompleteEventHandler(this, closeUIFormCompleteEventArgs);
+                ReferencePool.Release(closeUIFormCompleteEventArgs);
+            }
+
+            //将该UIForm放入队列中：之后会在”Update轮询“中遍历该集合，依次将该集合中的”UIForm“使用”对象池系统“进行处理
+            m_RecycleQueue.Enqueue(uiForm);
+        }
+
+        /// <summary>
+        /// 激活界面。
+        /// </summary>
+        /// <param name="uiForm">要激活的界面。</param>
+        public void RefocusUIForm(IUIForm uiForm)
+        {
+            RefocusUIForm(uiForm, null);
+        }
+
+        /// <summary>
+        /// 激活界面。
+        /// </summary>
+        /// <param name="uiForm">要激活的界面。</param>
+        /// <param name="userData">用户自定义数据。</param>
+        public void RefocusUIForm(IUIForm uiForm, object userData)
+        {
+            if (uiForm == null)
+            {
+                throw new GameFrameworkException("UI form is invalid.");
+            }
+
+            UIGroup uiGroup = (UIGroup)uiForm.UIGroup;
+            if (uiGroup == null)
+            {
+                throw new GameFrameworkException("UI group is invalid.");
+            }
+
+            uiGroup.RefocusUIForm(uiForm, userData);
+            uiGroup.Refresh();
+            uiForm.OnRefocus(userData);
+        }
+
+        #endregion
+
+        #region 框架固定方法
+        /// <summary>
+        /// 界面管理器轮询。
+        /// </summary>
+        /// <param name="elapseSeconds">逻辑流逝时间，以秒为单位。</param>
+        /// <param name="realElapseSeconds">真实流逝时间，以秒为单位。</param>
+        internal override void Update(float elapseSeconds, float realElapseSeconds)
+        {
+            //逐一将”m_RecycyleQueue“中的元素使用”对象池系统“回收掉
+            while (m_RecycleQueue.Count > 0)
+            {
+                IUIForm uiForm = m_RecycleQueue.Dequeue();
+                uiForm.OnRecycle();
+                m_InstancePool.Unspawn(uiForm.Handle);
+            }
+
+            foreach (KeyValuePair<string, UIGroup> uiGroup in m_UIGroups)
+            {
+                uiGroup.Value.Update(elapseSeconds, realElapseSeconds);
+            }
+        }
 
         /// <summary>
         /// 初始化界面管理器的新实例。
@@ -58,172 +300,6 @@ namespace GameFramework.UI
         }
 
         /// <summary>
-        /// 获取界面组数量。
-        /// </summary>
-        public int UIGroupCount
-        {
-            get
-            {
-                return m_UIGroups.Count;
-            }
-        }
-
-        /// <summary>
-        /// 获取或设置界面实例对象池自动释放可释放对象的间隔秒数。
-        /// </summary>
-        public float InstanceAutoReleaseInterval
-        {
-            get
-            {
-                return m_InstancePool.AutoReleaseInterval;
-            }
-            set
-            {
-                m_InstancePool.AutoReleaseInterval = value;
-            }
-        }
-
-        /// <summary>
-        /// 获取或设置界面实例对象池的容量。
-        /// </summary>
-        public int InstanceCapacity
-        {
-            get
-            {
-                return m_InstancePool.Capacity;
-            }
-            set
-            {
-                m_InstancePool.Capacity = value;
-            }
-        }
-
-        /// <summary>
-        /// 获取或设置界面实例对象池对象过期秒数。
-        /// </summary>
-        public float InstanceExpireTime
-        {
-            get
-            {
-                return m_InstancePool.ExpireTime;
-            }
-            set
-            {
-                m_InstancePool.ExpireTime = value;
-            }
-        }
-
-        /// <summary>
-        /// 获取或设置界面实例对象池的优先级。
-        /// </summary>
-        public int InstancePriority
-        {
-            get
-            {
-                return m_InstancePool.Priority;
-            }
-            set
-            {
-                m_InstancePool.Priority = value;
-            }
-        }
-
-        /// <summary>
-        /// 打开界面成功事件。
-        /// </summary>
-        public event EventHandler<OpenUIFormSuccessEventArgs> OpenUIFormSuccess
-        {
-            add
-            {
-                m_OpenUIFormSuccessEventHandler += value;
-            }
-            remove
-            {
-                m_OpenUIFormSuccessEventHandler -= value;
-            }
-        }
-
-        /// <summary>
-        /// 打开界面失败事件。
-        /// </summary>
-        public event EventHandler<OpenUIFormFailureEventArgs> OpenUIFormFailure
-        {
-            add
-            {
-                m_OpenUIFormFailureEventHandler += value;
-            }
-            remove
-            {
-                m_OpenUIFormFailureEventHandler -= value;
-            }
-        }
-
-        /// <summary>
-        /// 打开界面更新事件。
-        /// </summary>
-        public event EventHandler<OpenUIFormUpdateEventArgs> OpenUIFormUpdate
-        {
-            add
-            {
-                m_OpenUIFormUpdateEventHandler += value;
-            }
-            remove
-            {
-                m_OpenUIFormUpdateEventHandler -= value;
-            }
-        }
-
-        /// <summary>
-        /// 打开界面时加载依赖资源事件。
-        /// </summary>
-        public event EventHandler<OpenUIFormDependencyAssetEventArgs> OpenUIFormDependencyAsset
-        {
-            add
-            {
-                m_OpenUIFormDependencyAssetEventHandler += value;
-            }
-            remove
-            {
-                m_OpenUIFormDependencyAssetEventHandler -= value;
-            }
-        }
-
-        /// <summary>
-        /// 关闭界面完成事件。
-        /// </summary>
-        public event EventHandler<CloseUIFormCompleteEventArgs> CloseUIFormComplete
-        {
-            add
-            {
-                m_CloseUIFormCompleteEventHandler += value;
-            }
-            remove
-            {
-                m_CloseUIFormCompleteEventHandler -= value;
-            }
-        }
-
-        /// <summary>
-        /// 界面管理器轮询。
-        /// </summary>
-        /// <param name="elapseSeconds">逻辑流逝时间，以秒为单位。</param>
-        /// <param name="realElapseSeconds">真实流逝时间，以秒为单位。</param>
-        internal override void Update(float elapseSeconds, float realElapseSeconds)
-        {
-            while (m_RecycleQueue.Count > 0)
-            {
-                IUIForm uiForm = m_RecycleQueue.Dequeue();
-                uiForm.OnRecycle();
-                m_InstancePool.Unspawn(uiForm.Handle);
-            }
-
-            foreach (KeyValuePair<string, UIGroup> uiGroup in m_UIGroups)
-            {
-                uiGroup.Value.Update(elapseSeconds, realElapseSeconds);
-            }
-        }
-
-        /// <summary>
         /// 关闭并清理界面管理器。
         /// </summary>
         internal override void Shutdown()
@@ -236,6 +312,98 @@ namespace GameFramework.UI
             m_RecycleQueue.Clear();
         }
 
+        #endregion
+
+        #region 核心方法2：加载该UI的Resource资源”成功或失败“的回调，”加载该Resource资源过程中的回调“，”加载该Resource的依赖asset成功“的回调
+        private void LoadAssetSuccessCallback(string uiFormAssetName, object uiFormAsset, float duration, object userData)
+        {
+            OpenUIFormInfo openUIFormInfo = (OpenUIFormInfo)userData;
+            if (openUIFormInfo == null)
+            {
+                throw new GameFrameworkException("Open UI form info is invalid.");
+            }
+
+            if (m_UIFormsToReleaseOnLoad.Contains(openUIFormInfo.SerialId))
+            {
+                m_UIFormsToReleaseOnLoad.Remove(openUIFormInfo.SerialId);
+                ReferencePool.Release(openUIFormInfo);
+                m_UIFormHelper.ReleaseUIForm(uiFormAsset, null);
+                return;
+            }
+
+            m_UIFormsBeingLoaded.Remove(openUIFormInfo.SerialId);
+            //之所以需要加载UI资源，是因为“m_InstancePool中已经没有合适的可用对象”，
+            //因此需要加载相应的资源，然后创建新的实例对象并注册到“对象池”中
+            UIFormInstanceObject uiFormInstanceObject = UIFormInstanceObject.Create(uiFormAssetName, uiFormAsset, m_UIFormHelper.InstantiateUIForm(uiFormAsset), m_UIFormHelper);
+            m_InstancePool.Register(uiFormInstanceObject, true);
+
+            InternalOpenUIForm(openUIFormInfo.SerialId, uiFormAssetName, openUIFormInfo.UIGroup, uiFormInstanceObject.Target, openUIFormInfo.PauseCoveredUIForm, true, duration, openUIFormInfo.UserData);
+            //上述“InternalOpenUIForm”方法执行完毕后则“openUIFormInfo”变量不需要了，因此可以直接回收
+            ReferencePool.Release(openUIFormInfo);
+        }
+
+        private void LoadAssetFailureCallback(string uiFormAssetName, LoadResourceStatus status, string errorMessage, object userData)
+        {
+            OpenUIFormInfo openUIFormInfo = (OpenUIFormInfo)userData;
+            if (openUIFormInfo == null)
+            {
+                throw new GameFrameworkException("Open UI form info is invalid.");
+            }
+
+            if (m_UIFormsToReleaseOnLoad.Contains(openUIFormInfo.SerialId))
+            {
+                m_UIFormsToReleaseOnLoad.Remove(openUIFormInfo.SerialId);
+                return;
+            }
+
+            m_UIFormsBeingLoaded.Remove(openUIFormInfo.SerialId);
+            string appendErrorMessage = Utility.Text.Format("Load UI form failure, asset name '{0}', status '{1}', error message '{2}'.", uiFormAssetName, status, errorMessage);
+            if (m_OpenUIFormFailureEventHandler != null)
+            {
+                OpenUIFormFailureEventArgs openUIFormFailureEventArgs = OpenUIFormFailureEventArgs.Create(openUIFormInfo.SerialId, uiFormAssetName, openUIFormInfo.UIGroup.Name, openUIFormInfo.PauseCoveredUIForm, appendErrorMessage, openUIFormInfo.UserData);
+                m_OpenUIFormFailureEventHandler(this, openUIFormFailureEventArgs);
+                ReferencePool.Release(openUIFormFailureEventArgs);
+                return;
+            }
+
+            throw new GameFrameworkException(appendErrorMessage);
+        }
+
+        private void LoadAssetUpdateCallback(string uiFormAssetName, float progress, object userData)
+        {
+            OpenUIFormInfo openUIFormInfo = (OpenUIFormInfo)userData;
+            if (openUIFormInfo == null)
+            {
+                throw new GameFrameworkException("Open UI form info is invalid.");
+            }
+
+            if (m_OpenUIFormUpdateEventHandler != null)
+            {
+                OpenUIFormUpdateEventArgs openUIFormUpdateEventArgs = OpenUIFormUpdateEventArgs.Create(openUIFormInfo.SerialId, uiFormAssetName, openUIFormInfo.UIGroup.Name, openUIFormInfo.PauseCoveredUIForm, progress, openUIFormInfo.UserData);
+                m_OpenUIFormUpdateEventHandler(this, openUIFormUpdateEventArgs);
+                ReferencePool.Release(openUIFormUpdateEventArgs);
+            }
+        }
+
+        private void LoadAssetDependencyAssetCallback(string uiFormAssetName, string dependencyAssetName, int loadedCount, int totalCount, object userData)
+        {
+            OpenUIFormInfo openUIFormInfo = (OpenUIFormInfo)userData;
+            if (openUIFormInfo == null)
+            {
+                throw new GameFrameworkException("Open UI form info is invalid.");
+            }
+
+            if (m_OpenUIFormDependencyAssetEventHandler != null)
+            {
+                OpenUIFormDependencyAssetEventArgs openUIFormDependencyAssetEventArgs = OpenUIFormDependencyAssetEventArgs.Create(openUIFormInfo.SerialId, uiFormAssetName, openUIFormInfo.UIGroup.Name, openUIFormInfo.PauseCoveredUIForm, dependencyAssetName, loadedCount, totalCount, openUIFormInfo.UserData);
+                m_OpenUIFormDependencyAssetEventHandler(this, openUIFormDependencyAssetEventArgs);
+                ReferencePool.Release(openUIFormDependencyAssetEventArgs);
+            }
+        }
+
+        #endregion
+
+        #region 部分功能用到的重要方法
         /// <summary>
         /// 设置对象池管理器。
         /// </summary>
@@ -277,6 +445,195 @@ namespace GameFramework.UI
             }
 
             m_UIFormHelper = uiFormHelper;
+        }
+
+        /// <summary>
+        /// 关闭所有已加载的界面。
+        /// </summary>
+        public void CloseAllLoadedUIForms()
+        {
+            CloseAllLoadedUIForms(null);
+        }
+
+        /// <summary>
+        /// 关闭所有已加载的界面。
+        /// </summary>
+        /// <param name="userData">用户自定义数据。</param>
+        public void CloseAllLoadedUIForms(object userData)
+        {
+            IUIForm[] uiForms = GetAllLoadedUIForms();
+            foreach (IUIForm uiForm in uiForms)
+            {
+                if (!HasUIForm(uiForm.SerialId))
+                {
+                    continue;
+                }
+
+                CloseUIForm(uiForm, userData);
+            }
+        }
+
+        /// <summary>
+        /// 关闭所有正在加载的界面。
+        /// </summary>
+        public void CloseAllLoadingUIForms()
+        {
+            foreach (KeyValuePair<int, string> uiFormBeingLoaded in m_UIFormsBeingLoaded)
+            {
+                m_UIFormsToReleaseOnLoad.Add(uiFormBeingLoaded.Key);
+            }
+
+            m_UIFormsBeingLoaded.Clear();
+        }
+
+        /// <summary>
+        /// 设置界面实例的优先级。
+        /// </summary>
+        /// <param name="uiFormInstance">要设置优先级的界面实例。</param>
+        /// <param name="priority">界面实例优先级。</param>
+        public void SetUIFormInstancePriority(object uiFormInstance, int priority)
+        {
+            if (uiFormInstance == null)
+            {
+                throw new GameFrameworkException("UI form instance is invalid.");
+            }
+
+            m_InstancePool.SetPriority(uiFormInstance, priority);
+        }
+
+        /// <summary>
+        /// 设置界面实例是否被加锁。
+        /// </summary>
+        /// <param name="uiFormInstance">要设置是否被加锁的界面实例。</param>
+        /// <param name="locked">界面实例是否被加锁。</param>
+        public void SetUIFormInstanceLocked(object uiFormInstance, bool locked)
+        {
+            if (uiFormInstance == null)
+            {
+                throw new GameFrameworkException("UI form instance is invalid.");
+            }
+
+            m_InstancePool.SetLocked(uiFormInstance, locked);
+        }
+
+        #endregion
+
+        #region 有那么一丢丢作用的方法
+        /// <summary>
+        /// 获取所有正在加载界面的序列编号。
+        /// </summary>
+        /// <returns>所有正在加载界面的序列编号。</returns>
+        public int[] GetAllLoadingUIFormSerialIds()
+        {
+            int index = 0;
+            int[] results = new int[m_UIFormsBeingLoaded.Count];
+            foreach (KeyValuePair<int, string> uiFormBeingLoaded in m_UIFormsBeingLoaded)
+            {
+                results[index++] = uiFormBeingLoaded.Key;
+            }
+
+            return results;
+        }
+
+        /// <summary>
+        /// 获取所有正在加载界面的序列编号。
+        /// </summary>
+        /// <param name="results">所有正在加载界面的序列编号。</param>
+        public void GetAllLoadingUIFormSerialIds(List<int> results)
+        {
+            if (results == null)
+            {
+                throw new GameFrameworkException("Results is invalid.");
+            }
+
+            results.Clear();
+            foreach (KeyValuePair<int, string> uiFormBeingLoaded in m_UIFormsBeingLoaded)
+            {
+                results.Add(uiFormBeingLoaded.Key);
+            }
+        }
+
+        /// <summary>
+        /// 是否正在加载界面。
+        /// </summary>
+        /// <param name="serialId">界面序列编号。</param>
+        /// <returns>是否正在加载界面。</returns>
+        public bool IsLoadingUIForm(int serialId)
+        {
+            return m_UIFormsBeingLoaded.ContainsKey(serialId);
+        }
+
+        /// <summary>
+        /// 是否正在加载界面。
+        /// </summary>
+        /// <param name="uiFormAssetName">界面资源名称。</param>
+        /// <returns>是否正在加载界面。</returns>
+        public bool IsLoadingUIForm(string uiFormAssetName)
+        {
+            if (string.IsNullOrEmpty(uiFormAssetName))
+            {
+                throw new GameFrameworkException("UI form asset name is invalid.");
+            }
+
+            return m_UIFormsBeingLoaded.ContainsValue(uiFormAssetName);
+        }
+
+        /// <summary>
+        /// 是否是合法的界面。
+        /// </summary>
+        /// <param name="uiForm">界面。</param>
+        /// <returns>界面是否合法。</returns>
+        public bool IsValidUIForm(IUIForm uiForm)
+        {
+            if (uiForm == null)
+            {
+                return false;
+            }
+
+            return HasUIForm(uiForm.SerialId);
+        }
+
+        #endregion
+
+        #region ”不痛不痒“的工具方法
+        /// <summary>
+        /// 增加界面组。
+        /// </summary>
+        /// <param name="uiGroupName">界面组名称。</param>
+        /// <param name="uiGroupHelper">界面组辅助器。</param>
+        /// <returns>是否增加界面组成功。</returns>
+        public bool AddUIGroup(string uiGroupName, IUIGroupHelper uiGroupHelper)
+        {
+            return AddUIGroup(uiGroupName, 0, uiGroupHelper);
+        }
+
+        /// <summary>
+        /// 增加界面组。
+        /// </summary>
+        /// <param name="uiGroupName">界面组名称。</param>
+        /// <param name="uiGroupDepth">界面组深度。</param>
+        /// <param name="uiGroupHelper">界面组辅助器。</param>
+        /// <returns>是否增加界面组成功。</returns>
+        public bool AddUIGroup(string uiGroupName, int uiGroupDepth, IUIGroupHelper uiGroupHelper)
+        {
+            if (string.IsNullOrEmpty(uiGroupName))
+            {
+                throw new GameFrameworkException("UI group name is invalid.");
+            }
+
+            if (uiGroupHelper == null)
+            {
+                throw new GameFrameworkException("UI group helper is invalid.");
+            }
+
+            if (HasUIGroup(uiGroupName))
+            {
+                return false;
+            }
+
+            m_UIGroups.Add(uiGroupName, new UIGroup(uiGroupName, uiGroupDepth, uiGroupHelper));
+
+            return true;
         }
 
         /// <summary>
@@ -347,46 +704,6 @@ namespace GameFramework.UI
             {
                 results.Add(uiGroup.Value);
             }
-        }
-
-        /// <summary>
-        /// 增加界面组。
-        /// </summary>
-        /// <param name="uiGroupName">界面组名称。</param>
-        /// <param name="uiGroupHelper">界面组辅助器。</param>
-        /// <returns>是否增加界面组成功。</returns>
-        public bool AddUIGroup(string uiGroupName, IUIGroupHelper uiGroupHelper)
-        {
-            return AddUIGroup(uiGroupName, 0, uiGroupHelper);
-        }
-
-        /// <summary>
-        /// 增加界面组。
-        /// </summary>
-        /// <param name="uiGroupName">界面组名称。</param>
-        /// <param name="uiGroupDepth">界面组深度。</param>
-        /// <param name="uiGroupHelper">界面组辅助器。</param>
-        /// <returns>是否增加界面组成功。</returns>
-        public bool AddUIGroup(string uiGroupName, int uiGroupDepth, IUIGroupHelper uiGroupHelper)
-        {
-            if (string.IsNullOrEmpty(uiGroupName))
-            {
-                throw new GameFrameworkException("UI group name is invalid.");
-            }
-
-            if (uiGroupHelper == null)
-            {
-                throw new GameFrameworkException("UI group helper is invalid.");
-            }
-
-            if (HasUIGroup(uiGroupName))
-            {
-                return false;
-            }
-
-            m_UIGroups.Add(uiGroupName, new UIGroup(uiGroupName, uiGroupDepth, uiGroupHelper));
-
-            return true;
         }
 
         /// <summary>
@@ -551,80 +868,158 @@ namespace GameFramework.UI
             }
         }
 
+        #endregion
+
+        #region 属性和事件监听
         /// <summary>
-        /// 获取所有正在加载界面的序列编号。
+        /// 获取界面组数量。
         /// </summary>
-        /// <returns>所有正在加载界面的序列编号。</returns>
-        public int[] GetAllLoadingUIFormSerialIds()
+        public int UIGroupCount
         {
-            int index = 0;
-            int[] results = new int[m_UIFormsBeingLoaded.Count];
-            foreach (KeyValuePair<int, string> uiFormBeingLoaded in m_UIFormsBeingLoaded)
+            get
             {
-                results[index++] = uiFormBeingLoaded.Key;
-            }
-
-            return results;
-        }
-
-        /// <summary>
-        /// 获取所有正在加载界面的序列编号。
-        /// </summary>
-        /// <param name="results">所有正在加载界面的序列编号。</param>
-        public void GetAllLoadingUIFormSerialIds(List<int> results)
-        {
-            if (results == null)
-            {
-                throw new GameFrameworkException("Results is invalid.");
-            }
-
-            results.Clear();
-            foreach (KeyValuePair<int, string> uiFormBeingLoaded in m_UIFormsBeingLoaded)
-            {
-                results.Add(uiFormBeingLoaded.Key);
+                return m_UIGroups.Count;
             }
         }
 
         /// <summary>
-        /// 是否正在加载界面。
+        /// 获取或设置界面实例对象池自动释放可释放对象的间隔秒数。
         /// </summary>
-        /// <param name="serialId">界面序列编号。</param>
-        /// <returns>是否正在加载界面。</returns>
-        public bool IsLoadingUIForm(int serialId)
+        public float InstanceAutoReleaseInterval
         {
-            return m_UIFormsBeingLoaded.ContainsKey(serialId);
+            get
+            {
+                return m_InstancePool.AutoReleaseInterval;
+            }
+            set
+            {
+                m_InstancePool.AutoReleaseInterval = value;
+            }
         }
 
         /// <summary>
-        /// 是否正在加载界面。
+        /// 获取或设置界面实例对象池的容量。
         /// </summary>
-        /// <param name="uiFormAssetName">界面资源名称。</param>
-        /// <returns>是否正在加载界面。</returns>
-        public bool IsLoadingUIForm(string uiFormAssetName)
+        public int InstanceCapacity
         {
-            if (string.IsNullOrEmpty(uiFormAssetName))
+            get
             {
-                throw new GameFrameworkException("UI form asset name is invalid.");
+                return m_InstancePool.Capacity;
             }
-
-            return m_UIFormsBeingLoaded.ContainsValue(uiFormAssetName);
+            set
+            {
+                m_InstancePool.Capacity = value;
+            }
         }
 
         /// <summary>
-        /// 是否是合法的界面。
+        /// 获取或设置界面实例对象池对象过期秒数。
         /// </summary>
-        /// <param name="uiForm">界面。</param>
-        /// <returns>界面是否合法。</returns>
-        public bool IsValidUIForm(IUIForm uiForm)
+        public float InstanceExpireTime
         {
-            if (uiForm == null)
+            get
             {
-                return false;
+                return m_InstancePool.ExpireTime;
             }
-
-            return HasUIForm(uiForm.SerialId);
+            set
+            {
+                m_InstancePool.ExpireTime = value;
+            }
         }
 
+        /// <summary>
+        /// 获取或设置界面实例对象池的优先级。
+        /// </summary>
+        public int InstancePriority
+        {
+            get
+            {
+                return m_InstancePool.Priority;
+            }
+            set
+            {
+                m_InstancePool.Priority = value;
+            }
+        }
+
+        /// <summary>
+        /// 打开界面成功事件。
+        /// </summary>
+        public event EventHandler<OpenUIFormSuccessEventArgs> OpenUIFormSuccess
+        {
+            add
+            {
+                m_OpenUIFormSuccessEventHandler += value;
+            }
+            remove
+            {
+                m_OpenUIFormSuccessEventHandler -= value;
+            }
+        }
+
+        /// <summary>
+        /// 打开界面失败事件。
+        /// </summary>
+        public event EventHandler<OpenUIFormFailureEventArgs> OpenUIFormFailure
+        {
+            add
+            {
+                m_OpenUIFormFailureEventHandler += value;
+            }
+            remove
+            {
+                m_OpenUIFormFailureEventHandler -= value;
+            }
+        }
+
+        /// <summary>
+        /// 打开界面更新事件。
+        /// </summary>
+        public event EventHandler<OpenUIFormUpdateEventArgs> OpenUIFormUpdate
+        {
+            add
+            {
+                m_OpenUIFormUpdateEventHandler += value;
+            }
+            remove
+            {
+                m_OpenUIFormUpdateEventHandler -= value;
+            }
+        }
+
+        /// <summary>
+        /// 打开界面时加载依赖资源事件。
+        /// </summary>
+        public event EventHandler<OpenUIFormDependencyAssetEventArgs> OpenUIFormDependencyAsset
+        {
+            add
+            {
+                m_OpenUIFormDependencyAssetEventHandler += value;
+            }
+            remove
+            {
+                m_OpenUIFormDependencyAssetEventHandler -= value;
+            }
+        }
+
+        /// <summary>
+        /// 关闭界面完成事件。
+        /// </summary>
+        public event EventHandler<CloseUIFormCompleteEventArgs> CloseUIFormComplete
+        {
+            add
+            {
+                m_CloseUIFormCompleteEventHandler += value;
+            }
+            remove
+            {
+                m_CloseUIFormCompleteEventHandler -= value;
+            }
+        }
+
+        #endregion
+
+        #region 垃圾废物的重载方法”OpenUIForm“
         /// <summary>
         /// 打开界面。
         /// </summary>
@@ -711,349 +1106,6 @@ namespace GameFramework.UI
             return OpenUIForm(uiFormAssetName, uiGroupName, Constant.DefaultPriority, pauseCoveredUIForm, userData);
         }
 
-        /// <summary>
-        /// 打开界面。
-        /// </summary>
-        /// <param name="uiFormAssetName">界面资源名称。</param>
-        /// <param name="uiGroupName">界面组名称。</param>
-        /// <param name="priority">加载界面资源的优先级。</param>
-        /// <param name="pauseCoveredUIForm">是否暂停被覆盖的界面。</param>
-        /// <param name="userData">用户自定义数据。</param>
-        /// <returns>界面的序列编号。</returns>
-        public int OpenUIForm(string uiFormAssetName, string uiGroupName, int priority, bool pauseCoveredUIForm, object userData)
-        {
-            if (m_ResourceManager == null)
-            {
-                throw new GameFrameworkException("You must set resource manager first.");
-            }
-
-            if (m_UIFormHelper == null)
-            {
-                throw new GameFrameworkException("You must set UI form helper first.");
-            }
-
-            if (string.IsNullOrEmpty(uiFormAssetName))
-            {
-                throw new GameFrameworkException("UI form asset name is invalid.");
-            }
-
-            if (string.IsNullOrEmpty(uiGroupName))
-            {
-                throw new GameFrameworkException("UI group name is invalid.");
-            }
-
-            UIGroup uiGroup = (UIGroup)GetUIGroup(uiGroupName);
-            if (uiGroup == null)
-            {
-                throw new GameFrameworkException(Utility.Text.Format("UI group '{0}' is not exist.", uiGroupName));
-            }
-
-            int serialId = ++m_Serial;
-            UIFormInstanceObject uiFormInstanceObject = m_InstancePool.Spawn(uiFormAssetName);
-            if (uiFormInstanceObject == null)
-            {
-                m_UIFormsBeingLoaded.Add(serialId, uiFormAssetName);
-                m_ResourceManager.LoadAsset(uiFormAssetName, priority, m_LoadAssetCallbacks, OpenUIFormInfo.Create(serialId, uiGroup, pauseCoveredUIForm, userData));
-            }
-            else
-            {
-                InternalOpenUIForm(serialId, uiFormAssetName, uiGroup, uiFormInstanceObject.Target, pauseCoveredUIForm, false, 0f, userData);
-            }
-
-            return serialId;
-        }
-
-        /// <summary>
-        /// 关闭界面。
-        /// </summary>
-        /// <param name="serialId">要关闭界面的序列编号。</param>
-        public void CloseUIForm(int serialId)
-        {
-            CloseUIForm(serialId, null);
-        }
-
-        /// <summary>
-        /// 关闭界面。
-        /// </summary>
-        /// <param name="serialId">要关闭界面的序列编号。</param>
-        /// <param name="userData">用户自定义数据。</param>
-        public void CloseUIForm(int serialId, object userData)
-        {
-            if (IsLoadingUIForm(serialId))
-            {
-                m_UIFormsToReleaseOnLoad.Add(serialId);
-                m_UIFormsBeingLoaded.Remove(serialId);
-                return;
-            }
-
-            IUIForm uiForm = GetUIForm(serialId);
-            if (uiForm == null)
-            {
-                throw new GameFrameworkException(Utility.Text.Format("Can not find UI form '{0}'.", serialId));
-            }
-
-            CloseUIForm(uiForm, userData);
-        }
-
-        /// <summary>
-        /// 关闭界面。
-        /// </summary>
-        /// <param name="uiForm">要关闭的界面。</param>
-        public void CloseUIForm(IUIForm uiForm)
-        {
-            CloseUIForm(uiForm, null);
-        }
-
-        /// <summary>
-        /// 关闭界面。
-        /// </summary>
-        /// <param name="uiForm">要关闭的界面。</param>
-        /// <param name="userData">用户自定义数据。</param>
-        public void CloseUIForm(IUIForm uiForm, object userData)
-        {
-            if (uiForm == null)
-            {
-                throw new GameFrameworkException("UI form is invalid.");
-            }
-
-            UIGroup uiGroup = (UIGroup)uiForm.UIGroup;
-            if (uiGroup == null)
-            {
-                throw new GameFrameworkException("UI group is invalid.");
-            }
-
-            uiGroup.RemoveUIForm(uiForm);
-            uiForm.OnClose(m_IsShutdown, userData);
-            uiGroup.Refresh();
-
-            if (m_CloseUIFormCompleteEventHandler != null)
-            {
-                CloseUIFormCompleteEventArgs closeUIFormCompleteEventArgs = CloseUIFormCompleteEventArgs.Create(uiForm.SerialId, uiForm.UIFormAssetName, uiGroup, userData);
-                m_CloseUIFormCompleteEventHandler(this, closeUIFormCompleteEventArgs);
-                ReferencePool.Release(closeUIFormCompleteEventArgs);
-            }
-
-            m_RecycleQueue.Enqueue(uiForm);
-        }
-
-        /// <summary>
-        /// 关闭所有已加载的界面。
-        /// </summary>
-        public void CloseAllLoadedUIForms()
-        {
-            CloseAllLoadedUIForms(null);
-        }
-
-        /// <summary>
-        /// 关闭所有已加载的界面。
-        /// </summary>
-        /// <param name="userData">用户自定义数据。</param>
-        public void CloseAllLoadedUIForms(object userData)
-        {
-            IUIForm[] uiForms = GetAllLoadedUIForms();
-            foreach (IUIForm uiForm in uiForms)
-            {
-                if (!HasUIForm(uiForm.SerialId))
-                {
-                    continue;
-                }
-
-                CloseUIForm(uiForm, userData);
-            }
-        }
-
-        /// <summary>
-        /// 关闭所有正在加载的界面。
-        /// </summary>
-        public void CloseAllLoadingUIForms()
-        {
-            foreach (KeyValuePair<int, string> uiFormBeingLoaded in m_UIFormsBeingLoaded)
-            {
-                m_UIFormsToReleaseOnLoad.Add(uiFormBeingLoaded.Key);
-            }
-
-            m_UIFormsBeingLoaded.Clear();
-        }
-
-        /// <summary>
-        /// 激活界面。
-        /// </summary>
-        /// <param name="uiForm">要激活的界面。</param>
-        public void RefocusUIForm(IUIForm uiForm)
-        {
-            RefocusUIForm(uiForm, null);
-        }
-
-        /// <summary>
-        /// 激活界面。
-        /// </summary>
-        /// <param name="uiForm">要激活的界面。</param>
-        /// <param name="userData">用户自定义数据。</param>
-        public void RefocusUIForm(IUIForm uiForm, object userData)
-        {
-            if (uiForm == null)
-            {
-                throw new GameFrameworkException("UI form is invalid.");
-            }
-
-            UIGroup uiGroup = (UIGroup)uiForm.UIGroup;
-            if (uiGroup == null)
-            {
-                throw new GameFrameworkException("UI group is invalid.");
-            }
-
-            uiGroup.RefocusUIForm(uiForm, userData);
-            uiGroup.Refresh();
-            uiForm.OnRefocus(userData);
-        }
-
-        /// <summary>
-        /// 设置界面实例是否被加锁。
-        /// </summary>
-        /// <param name="uiFormInstance">要设置是否被加锁的界面实例。</param>
-        /// <param name="locked">界面实例是否被加锁。</param>
-        public void SetUIFormInstanceLocked(object uiFormInstance, bool locked)
-        {
-            if (uiFormInstance == null)
-            {
-                throw new GameFrameworkException("UI form instance is invalid.");
-            }
-
-            m_InstancePool.SetLocked(uiFormInstance, locked);
-        }
-
-        /// <summary>
-        /// 设置界面实例的优先级。
-        /// </summary>
-        /// <param name="uiFormInstance">要设置优先级的界面实例。</param>
-        /// <param name="priority">界面实例优先级。</param>
-        public void SetUIFormInstancePriority(object uiFormInstance, int priority)
-        {
-            if (uiFormInstance == null)
-            {
-                throw new GameFrameworkException("UI form instance is invalid.");
-            }
-
-            m_InstancePool.SetPriority(uiFormInstance, priority);
-        }
-
-        private void InternalOpenUIForm(int serialId, string uiFormAssetName, UIGroup uiGroup, object uiFormInstance, bool pauseCoveredUIForm, bool isNewInstance, float duration, object userData)
-        {
-            try
-            {
-                IUIForm uiForm = m_UIFormHelper.CreateUIForm(uiFormInstance, uiGroup, userData);
-                if (uiForm == null)
-                {
-                    throw new GameFrameworkException("Can not create UI form in UI form helper.");
-                }
-
-                uiForm.OnInit(serialId, uiFormAssetName, uiGroup, pauseCoveredUIForm, isNewInstance, userData);
-                uiGroup.AddUIForm(uiForm);
-                uiForm.OnOpen(userData);
-                uiGroup.Refresh();
-
-                if (m_OpenUIFormSuccessEventHandler != null)
-                {
-                    OpenUIFormSuccessEventArgs openUIFormSuccessEventArgs = OpenUIFormSuccessEventArgs.Create(uiForm, duration, userData);
-                    m_OpenUIFormSuccessEventHandler(this, openUIFormSuccessEventArgs);
-                    ReferencePool.Release(openUIFormSuccessEventArgs);
-                }
-            }
-            catch (Exception exception)
-            {
-                if (m_OpenUIFormFailureEventHandler != null)
-                {
-                    OpenUIFormFailureEventArgs openUIFormFailureEventArgs = OpenUIFormFailureEventArgs.Create(serialId, uiFormAssetName, uiGroup.Name, pauseCoveredUIForm, exception.ToString(), userData);
-                    m_OpenUIFormFailureEventHandler(this, openUIFormFailureEventArgs);
-                    ReferencePool.Release(openUIFormFailureEventArgs);
-                    return;
-                }
-
-                throw;
-            }
-        }
-
-        private void LoadAssetSuccessCallback(string uiFormAssetName, object uiFormAsset, float duration, object userData)
-        {
-            OpenUIFormInfo openUIFormInfo = (OpenUIFormInfo)userData;
-            if (openUIFormInfo == null)
-            {
-                throw new GameFrameworkException("Open UI form info is invalid.");
-            }
-
-            if (m_UIFormsToReleaseOnLoad.Contains(openUIFormInfo.SerialId))
-            {
-                m_UIFormsToReleaseOnLoad.Remove(openUIFormInfo.SerialId);
-                ReferencePool.Release(openUIFormInfo);
-                m_UIFormHelper.ReleaseUIForm(uiFormAsset, null);
-                return;
-            }
-
-            m_UIFormsBeingLoaded.Remove(openUIFormInfo.SerialId);
-            UIFormInstanceObject uiFormInstanceObject = UIFormInstanceObject.Create(uiFormAssetName, uiFormAsset, m_UIFormHelper.InstantiateUIForm(uiFormAsset), m_UIFormHelper);
-            m_InstancePool.Register(uiFormInstanceObject, true);
-
-            InternalOpenUIForm(openUIFormInfo.SerialId, uiFormAssetName, openUIFormInfo.UIGroup, uiFormInstanceObject.Target, openUIFormInfo.PauseCoveredUIForm, true, duration, openUIFormInfo.UserData);
-            ReferencePool.Release(openUIFormInfo);
-        }
-
-        private void LoadAssetFailureCallback(string uiFormAssetName, LoadResourceStatus status, string errorMessage, object userData)
-        {
-            OpenUIFormInfo openUIFormInfo = (OpenUIFormInfo)userData;
-            if (openUIFormInfo == null)
-            {
-                throw new GameFrameworkException("Open UI form info is invalid.");
-            }
-
-            if (m_UIFormsToReleaseOnLoad.Contains(openUIFormInfo.SerialId))
-            {
-                m_UIFormsToReleaseOnLoad.Remove(openUIFormInfo.SerialId);
-                return;
-            }
-
-            m_UIFormsBeingLoaded.Remove(openUIFormInfo.SerialId);
-            string appendErrorMessage = Utility.Text.Format("Load UI form failure, asset name '{0}', status '{1}', error message '{2}'.", uiFormAssetName, status, errorMessage);
-            if (m_OpenUIFormFailureEventHandler != null)
-            {
-                OpenUIFormFailureEventArgs openUIFormFailureEventArgs = OpenUIFormFailureEventArgs.Create(openUIFormInfo.SerialId, uiFormAssetName, openUIFormInfo.UIGroup.Name, openUIFormInfo.PauseCoveredUIForm, appendErrorMessage, openUIFormInfo.UserData);
-                m_OpenUIFormFailureEventHandler(this, openUIFormFailureEventArgs);
-                ReferencePool.Release(openUIFormFailureEventArgs);
-                return;
-            }
-
-            throw new GameFrameworkException(appendErrorMessage);
-        }
-
-        private void LoadAssetUpdateCallback(string uiFormAssetName, float progress, object userData)
-        {
-            OpenUIFormInfo openUIFormInfo = (OpenUIFormInfo)userData;
-            if (openUIFormInfo == null)
-            {
-                throw new GameFrameworkException("Open UI form info is invalid.");
-            }
-
-            if (m_OpenUIFormUpdateEventHandler != null)
-            {
-                OpenUIFormUpdateEventArgs openUIFormUpdateEventArgs = OpenUIFormUpdateEventArgs.Create(openUIFormInfo.SerialId, uiFormAssetName, openUIFormInfo.UIGroup.Name, openUIFormInfo.PauseCoveredUIForm, progress, openUIFormInfo.UserData);
-                m_OpenUIFormUpdateEventHandler(this, openUIFormUpdateEventArgs);
-                ReferencePool.Release(openUIFormUpdateEventArgs);
-            }
-        }
-
-        private void LoadAssetDependencyAssetCallback(string uiFormAssetName, string dependencyAssetName, int loadedCount, int totalCount, object userData)
-        {
-            OpenUIFormInfo openUIFormInfo = (OpenUIFormInfo)userData;
-            if (openUIFormInfo == null)
-            {
-                throw new GameFrameworkException("Open UI form info is invalid.");
-            }
-
-            if (m_OpenUIFormDependencyAssetEventHandler != null)
-            {
-                OpenUIFormDependencyAssetEventArgs openUIFormDependencyAssetEventArgs = OpenUIFormDependencyAssetEventArgs.Create(openUIFormInfo.SerialId, uiFormAssetName, openUIFormInfo.UIGroup.Name, openUIFormInfo.PauseCoveredUIForm, dependencyAssetName, loadedCount, totalCount, openUIFormInfo.UserData);
-                m_OpenUIFormDependencyAssetEventHandler(this, openUIFormDependencyAssetEventArgs);
-                ReferencePool.Release(openUIFormDependencyAssetEventArgs);
-            }
-        }
+        #endregion
     }
 }

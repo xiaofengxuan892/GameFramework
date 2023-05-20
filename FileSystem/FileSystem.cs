@@ -347,6 +347,10 @@ namespace GameFramework.FileSystem
                 return null;
             }
 
+            //本方法和其他“ReadFile(string name， byte[] bytes)”区别在于：
+            //后者限定了一次可以读取的字节的最大长度，每次读取的数据会暂存在“bytes”数组中，因此一次最多能够读取到“bytes.Length”的数据
+            //“startIndex”指代的是将读取到的数据存放在“bytes”中时，在bytes数组中的起始位置：从startIndex开始存放
+            //因此每次最多可以往bytes中存放“bytes.Length - startIndex”个字节的数据
             int length = fileInfo.Length;
             byte[] buffer = new byte[length];
             if (length > 0)
@@ -393,6 +397,7 @@ namespace GameFramework.FileSystem
 
         /// <summary>
         /// 读取指定文件。
+        /// PS：该方法用于将指定name的文件读取数据到buffer数组中(从buffer数组中startIndex开始，一共读取length个字节)
         /// </summary>
         /// <param name="name">要读取的文件名称。</param>
         /// <param name="buffer">存储读取文件内容的二进制流。</param>
@@ -505,6 +510,7 @@ namespace GameFramework.FileSystem
         /// <returns>存储读取文件片段内容的二进制流。</returns>
         public byte[] ReadFileSegment(string name, int offset, int length)
         {
+            //没有读取文件的权限，则直接报异常
             if (m_Access != FileSystemAccess.Read && m_Access != FileSystemAccess.ReadWrite)
             {
                 throw new GameFrameworkException("File system is not readable.");
@@ -531,11 +537,13 @@ namespace GameFramework.FileSystem
                 return null;
             }
 
+            //读取数据块中起始位置“offset”
             if (offset > fileInfo.Length)
             {
                 offset = fileInfo.Length;
             }
 
+            //设置剩余可以读取的总数据长度(最多可以读取leftLength数据)
             int leftLength = fileInfo.Length - offset;
             if (length > leftLength)
             {
@@ -545,6 +553,7 @@ namespace GameFramework.FileSystem
             byte[] buffer = new byte[length];
             if (length > 0)
             {
+                //注意：fileInfo本身是具有“offSet”属性的
                 m_Stream.Position = fileInfo.Offset + offset;
                 m_Stream.Read(buffer, 0, length);
             }

@@ -63,6 +63,7 @@ namespace GameFramework.ObjectPool
         /// <param name="realElapseSeconds">真实流逝时间，以秒为单位。</param>
         internal override void Update(float elapseSeconds, float realElapseSeconds)
         {
+            //轮询更新所有的“对象池”
             foreach (KeyValuePair<TypeNamePair, ObjectPoolBase> objectPool in m_ObjectPools)
             {
                 objectPool.Value.Update(elapseSeconds, realElapseSeconds);
@@ -84,6 +85,103 @@ namespace GameFramework.ObjectPool
         }
 
         /// <summary>
+        /// 释放对象池中的可释放对象。
+        /// </summary>
+        public void Release()
+        {
+            GetAllObjectPools(true, m_CachedAllObjectPools);
+            foreach (ObjectPoolBase objectPool in m_CachedAllObjectPools)
+            {
+                objectPool.Release();
+            }
+        }
+
+        /// <summary>
+        /// 释放对象池中的所有未使用对象。
+        /// </summary>
+        public void ReleaseAllUnused()
+        {
+            GetAllObjectPools(true, m_CachedAllObjectPools);
+            foreach (ObjectPoolBase objectPool in m_CachedAllObjectPools)
+            {
+                objectPool.ReleaseAllUnused();
+            }
+        }
+
+        #region 内部获取、创建、关闭单个对象池的方法
+
+        private bool InternalHasObjectPool(TypeNamePair typeNamePair)
+        {
+            return m_ObjectPools.ContainsKey(typeNamePair);
+        }
+
+        private ObjectPoolBase InternalGetObjectPool(TypeNamePair typeNamePair)
+        {
+            ObjectPoolBase objectPool = null;
+            if (m_ObjectPools.TryGetValue(typeNamePair, out objectPool))
+            {
+                return objectPool;
+            }
+
+            return null;
+        }
+
+        private IObjectPool<T> InternalCreateObjectPool<T>(string name, bool allowMultiSpawn, float autoReleaseInterval, int capacity, float expireTime, int priority) where T : ObjectBase
+        {
+            TypeNamePair typeNamePair = new TypeNamePair(typeof(T), name);
+            if (HasObjectPool<T>(name))
+            {
+                throw new GameFrameworkException(Utility.Text.Format("Already exist object pool '{0}'.", typeNamePair));
+            }
+
+            ObjectPool<T> objectPool = new ObjectPool<T>(name, allowMultiSpawn, autoReleaseInterval, capacity, expireTime, priority);
+            m_ObjectPools.Add(typeNamePair, objectPool);
+            return objectPool;
+        }
+
+        private ObjectPoolBase InternalCreateObjectPool(Type objectType, string name, bool allowMultiSpawn, float autoReleaseInterval, int capacity, float expireTime, int priority)
+        {
+            if (objectType == null)
+            {
+                throw new GameFrameworkException("Object type is invalid.");
+            }
+
+            if (!typeof(ObjectBase).IsAssignableFrom(objectType))
+            {
+                throw new GameFrameworkException(Utility.Text.Format("Object type '{0}' is invalid.", objectType.FullName));
+            }
+
+            TypeNamePair typeNamePair = new TypeNamePair(objectType, name);
+            if (HasObjectPool(objectType, name))
+            {
+                throw new GameFrameworkException(Utility.Text.Format("Already exist object pool '{0}'.", typeNamePair));
+            }
+
+            Type objectPoolType = typeof(ObjectPool<>).MakeGenericType(objectType);
+            ObjectPoolBase objectPool = (ObjectPoolBase)Activator.CreateInstance(objectPoolType, name, allowMultiSpawn, autoReleaseInterval, capacity, expireTime, priority);
+            m_ObjectPools.Add(typeNamePair, objectPool);
+            return objectPool;
+        }
+
+        private bool InternalDestroyObjectPool(TypeNamePair typeNamePair)
+        {
+            ObjectPoolBase objectPool = null;
+            if (m_ObjectPools.TryGetValue(typeNamePair, out objectPool))
+            {
+                objectPool.Shutdown();
+                return m_ObjectPools.Remove(typeNamePair);
+            }
+
+            return false;
+        }
+
+        private static int ObjectPoolComparer(ObjectPoolBase a, ObjectPoolBase b)
+        {
+            return a.Priority.CompareTo(b.Priority);
+        }
+        #endregion
+
+        /// <summary>
         /// 检查是否存在对象池。
         /// </summary>
         /// <typeparam name="T">对象类型。</typeparam>
@@ -95,6 +193,7 @@ namespace GameFramework.ObjectPool
 
         /// <summary>
         /// 检查是否存在对象池。
+        /// PS：这里的参数“objectType”指的是“ObjectBase”的扩展子类
         /// </summary>
         /// <param name="objectType">对象类型。</param>
         /// <returns>是否存在对象池。</returns>
@@ -255,6 +354,7 @@ namespace GameFramework.ObjectPool
 
         /// <summary>
         /// 获取对象池。
+        /// PS:获取满足目标条件的所有“对象池”
         /// </summary>
         /// <param name="condition">要检查的条件。</param>
         /// <returns>要获取的对象池。</returns>
@@ -378,7 +478,7 @@ namespace GameFramework.ObjectPool
         }
 
         /// <summary>
-        /// 创建允许单次获取的对象池。
+        /// 创建只能单次获取的对象池。
         /// </summary>
         /// <typeparam name="T">对象类型。</typeparam>
         /// <returns>要创建的允许单次获取的对象池。</returns>
@@ -1204,100 +1304,6 @@ namespace GameFramework.ObjectPool
             }
 
             return InternalDestroyObjectPool(new TypeNamePair(objectPool.ObjectType, objectPool.Name));
-        }
-
-        /// <summary>
-        /// 释放对象池中的可释放对象。
-        /// </summary>
-        public void Release()
-        {
-            GetAllObjectPools(true, m_CachedAllObjectPools);
-            foreach (ObjectPoolBase objectPool in m_CachedAllObjectPools)
-            {
-                objectPool.Release();
-            }
-        }
-
-        /// <summary>
-        /// 释放对象池中的所有未使用对象。
-        /// </summary>
-        public void ReleaseAllUnused()
-        {
-            GetAllObjectPools(true, m_CachedAllObjectPools);
-            foreach (ObjectPoolBase objectPool in m_CachedAllObjectPools)
-            {
-                objectPool.ReleaseAllUnused();
-            }
-        }
-
-        private bool InternalHasObjectPool(TypeNamePair typeNamePair)
-        {
-            return m_ObjectPools.ContainsKey(typeNamePair);
-        }
-
-        private ObjectPoolBase InternalGetObjectPool(TypeNamePair typeNamePair)
-        {
-            ObjectPoolBase objectPool = null;
-            if (m_ObjectPools.TryGetValue(typeNamePair, out objectPool))
-            {
-                return objectPool;
-            }
-
-            return null;
-        }
-
-        private IObjectPool<T> InternalCreateObjectPool<T>(string name, bool allowMultiSpawn, float autoReleaseInterval, int capacity, float expireTime, int priority) where T : ObjectBase
-        {
-            TypeNamePair typeNamePair = new TypeNamePair(typeof(T), name);
-            if (HasObjectPool<T>(name))
-            {
-                throw new GameFrameworkException(Utility.Text.Format("Already exist object pool '{0}'.", typeNamePair));
-            }
-
-            ObjectPool<T> objectPool = new ObjectPool<T>(name, allowMultiSpawn, autoReleaseInterval, capacity, expireTime, priority);
-            m_ObjectPools.Add(typeNamePair, objectPool);
-            return objectPool;
-        }
-
-        private ObjectPoolBase InternalCreateObjectPool(Type objectType, string name, bool allowMultiSpawn, float autoReleaseInterval, int capacity, float expireTime, int priority)
-        {
-            if (objectType == null)
-            {
-                throw new GameFrameworkException("Object type is invalid.");
-            }
-
-            if (!typeof(ObjectBase).IsAssignableFrom(objectType))
-            {
-                throw new GameFrameworkException(Utility.Text.Format("Object type '{0}' is invalid.", objectType.FullName));
-            }
-
-            TypeNamePair typeNamePair = new TypeNamePair(objectType, name);
-            if (HasObjectPool(objectType, name))
-            {
-                throw new GameFrameworkException(Utility.Text.Format("Already exist object pool '{0}'.", typeNamePair));
-            }
-
-            Type objectPoolType = typeof(ObjectPool<>).MakeGenericType(objectType);
-            ObjectPoolBase objectPool = (ObjectPoolBase)Activator.CreateInstance(objectPoolType, name, allowMultiSpawn, autoReleaseInterval, capacity, expireTime, priority);
-            m_ObjectPools.Add(typeNamePair, objectPool);
-            return objectPool;
-        }
-
-        private bool InternalDestroyObjectPool(TypeNamePair typeNamePair)
-        {
-            ObjectPoolBase objectPool = null;
-            if (m_ObjectPools.TryGetValue(typeNamePair, out objectPool))
-            {
-                objectPool.Shutdown();
-                return m_ObjectPools.Remove(typeNamePair);
-            }
-
-            return false;
-        }
-
-        private static int ObjectPoolComparer(ObjectPoolBase a, ObjectPoolBase b)
-        {
-            return a.Priority.CompareTo(b.Priority);
         }
     }
 }

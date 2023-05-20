@@ -13,12 +13,10 @@ namespace GameFramework.Resource
         {
             private sealed class LoadSceneTask : LoadResourceTaskBase
             {
+                //提供给外部的“回调”，但其赋值只能在“Create”中，并且其调用时机由该“LoadScenTask”类型变量从外部调用本脚本内的“public方法”
+                //而后在方法体内部执行该“回调”
+                //如此的执行流程主要是为了方便框架编写，并且具有很好的适用性
                 private LoadSceneCallbacks m_LoadSceneCallbacks;
-
-                public LoadSceneTask()
-                {
-                    m_LoadSceneCallbacks = null;
-                }
 
                 public override bool IsScene
                 {
@@ -28,12 +26,19 @@ namespace GameFramework.Resource
                     }
                 }
 
-                public static LoadSceneTask Create(string sceneAssetName, int priority, ResourceInfo resourceInfo, string[] dependencyAssetNames, LoadSceneCallbacks loadSceneCallbacks, object userData)
+                public static LoadSceneTask Create(string sceneAssetName, int priority, ResourceInfo resourceInfo,
+                    string[] dependencyAssetNames, LoadSceneCallbacks loadSceneCallbacks, object userData)
                 {
                     LoadSceneTask loadSceneTask = ReferencePool.Acquire<LoadSceneTask>();
-                    loadSceneTask.Initialize(sceneAssetName, null, priority, resourceInfo, dependencyAssetNames, userData);
+                    loadSceneTask.Initialize(sceneAssetName, null, priority, resourceInfo,
+                        dependencyAssetNames, userData);
                     loadSceneTask.m_LoadSceneCallbacks = loadSceneCallbacks;
                     return loadSceneTask;
+                }
+
+                public LoadSceneTask()
+                {
+                    m_LoadSceneCallbacks = null;
                 }
 
                 public override void Clear()
@@ -42,6 +47,7 @@ namespace GameFramework.Resource
                     m_LoadSceneCallbacks = null;
                 }
 
+                #region 提供给本LoadSceneTask类型变量的public方法，由该类型变量从外部像其他普通的public方法一样调用
                 public override void OnLoadAssetSuccess(LoadResourceAgent agent, object asset, float duration)
                 {
                     base.OnLoadAssetSuccess(agent, asset, duration);
@@ -80,6 +86,7 @@ namespace GameFramework.Resource
                         m_LoadSceneCallbacks.LoadSceneDependencyAssetCallback(AssetName, dependencyAssetName, LoadedDependencyAssetCount, TotalDependencyAssetCount, UserData);
                     }
                 }
+                #endregion
             }
         }
     }

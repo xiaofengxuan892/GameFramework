@@ -45,6 +45,7 @@ namespace GameFramework.Resource
 
                     /// <summary>
                     /// 资源已废弃。
+                    /// PS：“废弃”的英文单词不应该使用更为通俗常见的“Abandaned、Useless”吗？
                     /// </summary>
                     Disuse
                 }

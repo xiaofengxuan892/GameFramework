@@ -58,6 +58,9 @@ namespace GameFramework.Entity
 
             public static ShowEntityInfo Create(int serialId, int entityId, EntityGroup entityGroup, object userData)
             {
+                //请注意：当创建一个新的对象时，使用默认的“new”和这里的“Create”是不一样的
+                //这里的“Create”是该类型的“Static”方法，并且在方法体内部使用“ReferencePool.Acquire”来获取该对象实例
+                //避免了频繁创建导致的代码GC
                 ShowEntityInfo showEntityInfo = ReferencePool.Acquire<ShowEntityInfo>();
                 showEntityInfo.m_SerialId = serialId;
                 showEntityInfo.m_EntityId = entityId;

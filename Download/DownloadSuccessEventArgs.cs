@@ -21,6 +21,10 @@ namespace GameFramework.Download
             DownloadPath = null;
             DownloadUri = null;
             CurrentLength = 0L;
+            //任何需要“Download”的地方都可以将某些“自定义数据”在使用“DownloadManager.AddDownload”方法时传递过来，
+            //然后当“下载完成“后，通过该事件”DownloadSuccessEventArgs“中的”userdata“传递过来
+            //并以此来鉴别是否正确。
+            //这也是”userdata“中的其中一种作用
             UserData = null;
         }
 

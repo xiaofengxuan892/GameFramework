@@ -9,6 +9,7 @@ namespace GameFramework
 {
     /// <summary>
     /// 开始处理任务的状态。
+    /// PS：将以将此枚举与“TaskStatus”合并，两者的作用有些重复
     /// </summary>
     public enum StartTaskStatus : byte
     {

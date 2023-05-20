@@ -38,6 +38,7 @@ namespace GameFramework.UI
                 }
 
                 UIFormInstanceObject uiFormInstanceObject = ReferencePool.Acquire<UIFormInstanceObject>();
+                //执行“ObjectBase”基类的“Initialize”方法，初始化相关参数
                 uiFormInstanceObject.Initialize(name, uiFormInstance);
                 uiFormInstanceObject.m_UIFormAsset = uiFormAsset;
                 uiFormInstanceObject.m_UIFormHelper = uiFormHelper;

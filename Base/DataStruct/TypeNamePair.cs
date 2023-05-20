@@ -44,52 +44,7 @@ namespace GameFramework
             m_Name = name ?? string.Empty;
         }
 
-        /// <summary>
-        /// 获取类型。
-        /// </summary>
-        public Type Type
-        {
-            get
-            {
-                return m_Type;
-            }
-        }
-
-        /// <summary>
-        /// 获取名称。
-        /// </summary>
-        public string Name
-        {
-            get
-            {
-                return m_Name;
-            }
-        }
-
-        /// <summary>
-        /// 获取类型和名称的组合值字符串。
-        /// </summary>
-        /// <returns>类型和名称的组合值字符串。</returns>
-        public override string ToString()
-        {
-            if (m_Type == null)
-            {
-                throw new GameFrameworkException("Type is invalid.");
-            }
-
-            string typeName = m_Type.FullName;
-            return string.IsNullOrEmpty(m_Name) ? typeName : Utility.Text.Format("{0}.{1}", typeName, m_Name);
-        }
-
-        /// <summary>
-        /// 获取对象的哈希值。
-        /// </summary>
-        /// <returns>对象的哈希值。</returns>
-        public override int GetHashCode()
-        {
-            return m_Type.GetHashCode() ^ m_Name.GetHashCode();
-        }
-
+        #region 核心方法：新类型“TypeAndPair”的比较“Equals”逻辑，并重写”System.Object“的”ToString“方法(struct值类型)
         /// <summary>
         /// 比较对象是否与自身相等。
         /// </summary>
@@ -131,5 +86,55 @@ namespace GameFramework
         {
             return !(a == b);
         }
+
+        /// <summary>
+        /// 获取类型和名称的组合值字符串。
+        /// </summary>
+        /// <returns>类型和名称的组合值字符串。</returns>
+        public override string ToString()
+        {
+            if (m_Type == null)
+            {
+                throw new GameFrameworkException("Type is invalid.");
+            }
+
+            string typeName = m_Type.FullName;
+            return string.IsNullOrEmpty(m_Name) ? typeName : Utility.Text.Format("{0}.{1}", typeName, m_Name);
+        }
+
+        /// <summary>
+        /// 获取对象的哈希值。
+        /// </summary>
+        /// <returns>对象的哈希值。</returns>
+        public override int GetHashCode()
+        {
+            return m_Type.GetHashCode() ^ m_Name.GetHashCode();
+        }
+
+        #endregion
+
+        #region 属性
+        /// <summary>
+        /// 获取类型。
+        /// </summary>
+        public Type Type
+        {
+            get
+            {
+                return m_Type;
+            }
+        }
+
+        /// <summary>
+        /// 获取名称。
+        /// </summary>
+        public string Name
+        {
+            get
+            {
+                return m_Name;
+            }
+        }
+        #endregion
     }
 }

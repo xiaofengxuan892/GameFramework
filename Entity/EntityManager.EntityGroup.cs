@@ -21,6 +21,8 @@ namespace GameFramework.Entity
             private readonly IEntityGroupHelper m_EntityGroupHelper;
             private readonly IObjectPool<EntityInstanceObject> m_InstancePool;
             private readonly GameFrameworkLinkedList<IEntity> m_Entities;
+            //这个参数其实作用微小，建议从"ReferencePool.Acquire"直接复用对象，不用在这里“声明全局变量”来使用
+            //但是问题是：如果是每帧都要执行的操作，频繁的调用“ReferencePool.Acquire”还不如直接声明“全局变量”来使用的好
             private LinkedListNode<IEntity> m_CachedNode;
 
             /// <summary>
@@ -156,6 +158,8 @@ namespace GameFramework.Entity
                 LinkedListNode<IEntity> current = m_Entities.First;
                 while (current != null)
                 {
+                    //这个沙雕的“m_CachedNode”真的有存在的必要吗？虽然可以在“Update”中减少不断的“创建新变量”导致的GC
+                    //但真的比较微小啊
                     m_CachedNode = current.Next;
                     current.Value.OnUpdate(elapseSeconds, realElapseSeconds);
                     current = m_CachedNode;
@@ -183,6 +187,7 @@ namespace GameFramework.Entity
 
             /// <summary>
             /// 实体组中是否存在实体。
+            /// 问题来了：“entityAssetName”能够唯一区分单个实体吗？不是通过“实体id”来唯一区分的吗？？？
             /// </summary>
             /// <param name="entityAssetName">实体资源名称。</param>
             /// <returns>实体组中是否存在实体。</returns>
@@ -257,6 +262,7 @@ namespace GameFramework.Entity
                     throw new GameFrameworkException("Entity asset name is invalid.");
                 }
 
+                //这里新创建的对象如何回收利用啊？这样晾着不是很浪费的吗？
                 List<IEntity> results = new List<IEntity>();
                 foreach (IEntity entity in m_Entities)
                 {
@@ -344,6 +350,7 @@ namespace GameFramework.Entity
             /// <param name="entity">要移除的实体。</param>
             public void RemoveEntity(IEntity entity)
             {
+                //“m_CachedNode”参数没有的话也没关系，直接使用“GameFrameworkLinkedList”删除指定节点即可
                 if (m_CachedNode != null && m_CachedNode.Value == entity)
                 {
                     m_CachedNode = m_CachedNode.Next;
@@ -355,6 +362,7 @@ namespace GameFramework.Entity
                 }
             }
 
+            //这个“Registerxxx”和下面的“Spawnxxx”为什么不合并？？？合并后命名为“Createxxx”即可
             public void RegisterEntityInstanceObject(EntityInstanceObject obj, bool spawned)
             {
                 m_InstancePool.Register(obj, spawned);

@@ -11,6 +11,8 @@ namespace GameFramework.Config
 {
     internal sealed partial class ConfigManager : GameFrameworkModule, IConfigManager
     {
+        //这里和“EditorResourceComponent”中用到的“Struct”数据“LoadAssetInfo”，“LoadSceneInfo”一样
+        //完全可以将其直接放置到“ConfigManager.cs”内部，不需要重新创建新脚本，减少文件数量
         [StructLayout(LayoutKind.Auto)]
         private struct ConfigData
         {

@@ -12,6 +12,7 @@ namespace GameFramework.ObjectPool
 {
     /// <summary>
     /// 对象信息。
+    /// PS：为什么该对象不需要使用“ReferencePool.Release”回收？？仅仅只是因为其为struct(值类型)？
     /// </summary>
     [StructLayout(LayoutKind.Auto)]
     public struct ObjectInfo

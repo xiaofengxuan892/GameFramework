@@ -9,6 +9,7 @@ namespace GameFramework.Localization
 {
     /// <summary>
     /// 本地化语言。
+    /// PS: 由于语言的种类在各个游戏中基本都一样，因此提取放到”GameFramework“框架底层放置，无需放到”GameMain.Scripts“中
     /// </summary>
     public enum Language : byte
     {

@@ -320,6 +320,7 @@ namespace GameFramework
                     throw new GameFrameworkException("Stream is invalid.");
                 }
 
+                //用于存储”解压后的stream“，初始时为”stream.Position = 0“，并且”stream.Length = 0“
                 if (decompressedStream == null)
                 {
                     throw new GameFrameworkException("Decompressed stream is invalid.");

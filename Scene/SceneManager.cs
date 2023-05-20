@@ -16,18 +16,23 @@ namespace GameFramework.Scene
     /// </summary>
     internal sealed class SceneManager : GameFrameworkModule, ISceneManager
     {
+        private IResourceManager m_ResourceManager;
+
         private readonly List<string> m_LoadedSceneAssetNames;
         private readonly List<string> m_LoadingSceneAssetNames;
         private readonly List<string> m_UnloadingSceneAssetNames;
+
         private readonly LoadSceneCallbacks m_LoadSceneCallbacks;
-        private readonly UnloadSceneCallbacks m_UnloadSceneCallbacks;
-        private IResourceManager m_ResourceManager;
         private EventHandler<LoadSceneSuccessEventArgs> m_LoadSceneSuccessEventHandler;
         private EventHandler<LoadSceneFailureEventArgs> m_LoadSceneFailureEventHandler;
         private EventHandler<LoadSceneUpdateEventArgs> m_LoadSceneUpdateEventHandler;
         private EventHandler<LoadSceneDependencyAssetEventArgs> m_LoadSceneDependencyAssetEventHandler;
+
+        private readonly UnloadSceneCallbacks m_UnloadSceneCallbacks;
         private EventHandler<UnloadSceneSuccessEventArgs> m_UnloadSceneSuccessEventHandler;
         private EventHandler<UnloadSceneFailureEventArgs> m_UnloadSceneFailureEventHandler;
+
+        #region 各个“xxComponent”中“与机制相关”的一些固定方法
 
         /// <summary>
         /// 初始化场景管理器的新实例。
@@ -49,6 +54,41 @@ namespace GameFramework.Scene
         }
 
         /// <summary>
+        /// 场景管理器轮询。
+        /// </summary>
+        /// <param name="elapseSeconds">逻辑流逝时间，以秒为单位。</param>
+        /// <param name="realElapseSeconds">真实流逝时间，以秒为单位。</param>
+        internal override void Update(float elapseSeconds, float realElapseSeconds)
+        {
+        }
+
+        /// <summary>
+        /// 关闭并清理场景管理器。
+        /// </summary>
+        internal override void Shutdown()
+        {
+            //卸载所有“已加载成功”的scene
+            string[] loadedSceneAssetNames = m_LoadedSceneAssetNames.ToArray();
+            foreach (string loadedSceneAssetName in loadedSceneAssetNames)
+            {
+                if (SceneIsUnloading(loadedSceneAssetName))
+                {
+                    continue;
+                }
+
+                UnloadScene(loadedSceneAssetName);
+            }
+
+            m_LoadedSceneAssetNames.Clear();
+            m_LoadingSceneAssetNames.Clear();
+            m_UnloadingSceneAssetNames.Clear();
+        }
+
+        #endregion
+
+        #region 核心方法或属性
+
+        /// <summary>
         /// 获取游戏框架模块优先级。
         /// </summary>
         /// <remarks>优先级较高的模块会优先轮询，并且关闭操作会后进行。</remarks>
@@ -60,6 +100,312 @@ namespace GameFramework.Scene
             }
         }
 
+        /// <summary>
+        /// 加载场景。
+        /// </summary>
+        /// <param name="sceneAssetName">场景资源名称。</param>
+        /// <param name="priority">加载场景资源的优先级。</param>
+        /// <param name="userData">用户自定义数据。</param>
+        public void LoadScene(string sceneAssetName, int priority, object userData)
+        {
+            if (string.IsNullOrEmpty(sceneAssetName))
+            {
+                throw new GameFrameworkException("Scene asset name is invalid.");
+            }
+
+            if (m_ResourceManager == null)
+            {
+                throw new GameFrameworkException("You must set resource manager first.");
+            }
+
+            if (SceneIsUnloading(sceneAssetName))
+            {
+                throw new GameFrameworkException(Utility.Text.Format("Scene asset '{0}' is being unloaded.", sceneAssetName));
+            }
+
+            if (SceneIsLoading(sceneAssetName))
+            {
+                throw new GameFrameworkException(Utility.Text.Format("Scene asset '{0}' is being loaded.", sceneAssetName));
+            }
+
+            if (SceneIsLoaded(sceneAssetName))
+            {
+                throw new GameFrameworkException(Utility.Text.Format("Scene asset '{0}' is already loaded.", sceneAssetName));
+            }
+
+            //由于“加载scene”的过程都是“异步的”，因此需要先放入集合中，然后等待“回调返回后再从集合中移除”
+            m_LoadingSceneAssetNames.Add(sceneAssetName);
+            m_ResourceManager.LoadScene(sceneAssetName, priority, m_LoadSceneCallbacks, userData);
+        }
+
+        /// <summary>
+        /// 卸载场景。
+        /// </summary>
+        /// <param name="sceneAssetName">场景资源名称。</param>
+        /// <param name="userData">用户自定义数据。</param>
+        public void UnloadScene(string sceneAssetName, object userData)
+        {
+            if (string.IsNullOrEmpty(sceneAssetName))
+            {
+                throw new GameFrameworkException("Scene asset name is invalid.");
+            }
+
+            if (m_ResourceManager == null)
+            {
+                throw new GameFrameworkException("You must set resource manager first.");
+            }
+
+            if (SceneIsUnloading(sceneAssetName))
+            {
+                throw new GameFrameworkException(Utility.Text.Format("Scene asset '{0}' is being unloaded.", sceneAssetName));
+            }
+
+            if (SceneIsLoading(sceneAssetName))
+            {
+                throw new GameFrameworkException(Utility.Text.Format("Scene asset '{0}' is being loaded.", sceneAssetName));
+            }
+
+            if (!SceneIsLoaded(sceneAssetName))
+            {
+                throw new GameFrameworkException(Utility.Text.Format("Scene asset '{0}' is not loaded yet.", sceneAssetName));
+            }
+
+            //"由于卸载scene"的过程是异步的，因此需要先放入相应的集合，等待“卸载回调”再从集合中移除
+            m_UnloadingSceneAssetNames.Add(sceneAssetName);
+            m_ResourceManager.UnloadScene(sceneAssetName, m_UnloadSceneCallbacks, userData);
+        }
+
+        #endregion
+
+        #region 加载或卸载scene过程中用到的一些工具方法
+        /// <summary>
+        /// 设置资源管理器。
+        /// </summary>
+        /// <param name="resourceManager">资源管理器。</param>
+        public void SetResourceManager(IResourceManager resourceManager)
+        {
+            if (resourceManager == null)
+            {
+                throw new GameFrameworkException("Resource manager is invalid.");
+            }
+
+            m_ResourceManager = resourceManager;
+        }
+
+        /// <summary>
+        /// 获取场景是否正在加载。
+        /// </summary>
+        /// <param name="sceneAssetName">场景资源名称。</param>
+        /// <returns>场景是否正在加载。</returns>
+        public bool SceneIsLoading(string sceneAssetName)
+        {
+            if (string.IsNullOrEmpty(sceneAssetName))
+            {
+                throw new GameFrameworkException("Scene asset name is invalid.");
+            }
+
+            return m_LoadingSceneAssetNames.Contains(sceneAssetName);
+        }
+
+        /// <summary>
+        /// 获取场景是否正在卸载。
+        /// </summary>
+        /// <param name="sceneAssetName">场景资源名称。</param>
+        /// <returns>场景是否正在卸载。</returns>
+        public bool SceneIsUnloading(string sceneAssetName)
+        {
+            if (string.IsNullOrEmpty(sceneAssetName))
+            {
+                throw new GameFrameworkException("Scene asset name is invalid.");
+            }
+
+            return m_UnloadingSceneAssetNames.Contains(sceneAssetName);
+        }
+
+        /// <summary>
+        /// 获取场景是否已加载。
+        /// </summary>
+        /// <param name="sceneAssetName">场景资源名称。</param>
+        /// <returns>场景是否已加载。</returns>
+        public bool SceneIsLoaded(string sceneAssetName)
+        {
+            if (string.IsNullOrEmpty(sceneAssetName))
+            {
+                throw new GameFrameworkException("Scene asset name is invalid.");
+            }
+
+            return m_LoadedSceneAssetNames.Contains(sceneAssetName);
+        }
+
+        /// <summary>
+        /// 检查场景资源是否存在。
+        /// </summary>
+        /// <param name="sceneAssetName">要检查场景资源的名称。</param>
+        /// <returns>场景资源是否存在。</returns>
+        public bool HasScene(string sceneAssetName)
+        {
+            return m_ResourceManager.HasAsset(sceneAssetName) != HasAssetResult.NotExist;
+        }
+
+        #endregion
+
+        #region “加载或卸载scene”的回调监听
+        private void LoadSceneSuccessCallback(string sceneAssetName, float duration, object userData)
+        {
+            //“加载scene”成功则从“m_LoadingSceneAssetNames”集合中移除，然后放入“m_LoadedSceneAssetNames”集合中
+            m_LoadingSceneAssetNames.Remove(sceneAssetName);
+            m_LoadedSceneAssetNames.Add(sceneAssetName);
+            if (m_LoadSceneSuccessEventHandler != null)
+            {
+                LoadSceneSuccessEventArgs loadSceneSuccessEventArgs = LoadSceneSuccessEventArgs.Create(sceneAssetName, duration, userData);
+                m_LoadSceneSuccessEventHandler(this, loadSceneSuccessEventArgs);
+                ReferencePool.Release(loadSceneSuccessEventArgs);
+            }
+        }
+
+        private void LoadSceneFailureCallback(string sceneAssetName, LoadResourceStatus status, string errorMessage, object userData)
+        {
+            m_LoadingSceneAssetNames.Remove(sceneAssetName);
+            string appendErrorMessage = Utility.Text.Format("Load scene failure, scene asset name '{0}', status '{1}', error message '{2}'.", sceneAssetName, status, errorMessage);
+            if (m_LoadSceneFailureEventHandler != null)
+            {
+                LoadSceneFailureEventArgs loadSceneFailureEventArgs = LoadSceneFailureEventArgs.Create(sceneAssetName, appendErrorMessage, userData);
+                m_LoadSceneFailureEventHandler(this, loadSceneFailureEventArgs);
+                ReferencePool.Release(loadSceneFailureEventArgs);
+                return;
+            }
+
+            throw new GameFrameworkException(appendErrorMessage);
+        }
+
+        private void LoadSceneUpdateCallback(string sceneAssetName, float progress, object userData)
+        {
+            if (m_LoadSceneUpdateEventHandler != null)
+            {
+                LoadSceneUpdateEventArgs loadSceneUpdateEventArgs = LoadSceneUpdateEventArgs.Create(sceneAssetName, progress, userData);
+                m_LoadSceneUpdateEventHandler(this, loadSceneUpdateEventArgs);
+                ReferencePool.Release(loadSceneUpdateEventArgs);
+            }
+        }
+
+        //该scene的其中一个依赖asset加载成功
+        private void LoadSceneDependencyAssetCallback(string sceneAssetName, string dependencyAssetName, int loadedCount, int totalCount, object userData)
+        {
+            if (m_LoadSceneDependencyAssetEventHandler != null)
+            {
+                LoadSceneDependencyAssetEventArgs loadSceneDependencyAssetEventArgs = LoadSceneDependencyAssetEventArgs.Create(sceneAssetName, dependencyAssetName, loadedCount, totalCount, userData);
+                m_LoadSceneDependencyAssetEventHandler(this, loadSceneDependencyAssetEventArgs);
+                ReferencePool.Release(loadSceneDependencyAssetEventArgs);
+            }
+        }
+
+        private void UnloadSceneSuccessCallback(string sceneAssetName, object userData)
+        {
+            //移除“正在卸载中的场景”集合中该对象
+            m_UnloadingSceneAssetNames.Remove(sceneAssetName);
+            //同时已加载的场景集合中也需要移除
+            m_LoadedSceneAssetNames.Remove(sceneAssetName);
+            if (m_UnloadSceneSuccessEventHandler != null)
+            {
+                UnloadSceneSuccessEventArgs unloadSceneSuccessEventArgs = UnloadSceneSuccessEventArgs.Create(sceneAssetName, userData);
+                m_UnloadSceneSuccessEventHandler(this, unloadSceneSuccessEventArgs);
+                ReferencePool.Release(unloadSceneSuccessEventArgs);
+            }
+        }
+
+        private void UnloadSceneFailureCallback(string sceneAssetName, object userData)
+        {
+            m_UnloadingSceneAssetNames.Remove(sceneAssetName);
+            if (m_UnloadSceneFailureEventHandler != null)
+            {
+                UnloadSceneFailureEventArgs unloadSceneFailureEventArgs = UnloadSceneFailureEventArgs.Create(sceneAssetName, userData);
+                m_UnloadSceneFailureEventHandler(this, unloadSceneFailureEventArgs);
+                ReferencePool.Release(unloadSceneFailureEventArgs);
+                return;
+            }
+
+            throw new GameFrameworkException(Utility.Text.Format("Unload scene failure, scene asset name '{0}'.", sceneAssetName));
+        }
+
+        #endregion
+
+
+        #region 用处很小的方法
+        /// <summary>
+        /// 获取已加载场景的资源名称。
+        /// </summary>
+        /// <returns>已加载场景的资源名称。</returns>
+        public string[] GetLoadedSceneAssetNames()
+        {
+            return m_LoadedSceneAssetNames.ToArray();
+        }
+
+        /// <summary>
+        /// 获取已加载场景的资源名称。
+        /// </summary>
+        /// <param name="results">已加载场景的资源名称。</param>
+        public void GetLoadedSceneAssetNames(List<string> results)
+        {
+            if (results == null)
+            {
+                throw new GameFrameworkException("Results is invalid.");
+            }
+
+            results.Clear();
+            results.AddRange(m_LoadedSceneAssetNames);
+        }
+
+        /// <summary>
+        /// 获取正在加载场景的资源名称。
+        /// </summary>
+        /// <returns>正在加载场景的资源名称。</returns>
+        public string[] GetLoadingSceneAssetNames()
+        {
+            return m_LoadingSceneAssetNames.ToArray();
+        }
+
+        /// <summary>
+        /// 获取正在加载场景的资源名称。
+        /// </summary>
+        /// <param name="results">正在加载场景的资源名称。</param>
+        public void GetLoadingSceneAssetNames(List<string> results)
+        {
+            if (results == null)
+            {
+                throw new GameFrameworkException("Results is invalid.");
+            }
+
+            results.Clear();
+            results.AddRange(m_LoadingSceneAssetNames);
+        }
+
+        /// <summary>
+        /// 获取正在卸载场景的资源名称。
+        /// </summary>
+        /// <returns>正在卸载场景的资源名称。</returns>
+        public string[] GetUnloadingSceneAssetNames()
+        {
+            return m_UnloadingSceneAssetNames.ToArray();
+        }
+
+        /// <summary>
+        /// 获取正在卸载场景的资源名称。
+        /// </summary>
+        /// <param name="results">正在卸载场景的资源名称。</param>
+        public void GetUnloadingSceneAssetNames(List<string> results)
+        {
+            if (results == null)
+            {
+                throw new GameFrameworkException("Results is invalid.");
+            }
+
+            results.Clear();
+            results.AddRange(m_UnloadingSceneAssetNames);
+        }
+
+        #endregion
+
+        #region 加载或卸载scene用到的各个监听事件
         /// <summary>
         /// 加载场景成功事件。
         /// </summary>
@@ -150,177 +496,9 @@ namespace GameFramework.Scene
             }
         }
 
-        /// <summary>
-        /// 场景管理器轮询。
-        /// </summary>
-        /// <param name="elapseSeconds">逻辑流逝时间，以秒为单位。</param>
-        /// <param name="realElapseSeconds">真实流逝时间，以秒为单位。</param>
-        internal override void Update(float elapseSeconds, float realElapseSeconds)
-        {
-        }
+        #endregion
 
-        /// <summary>
-        /// 关闭并清理场景管理器。
-        /// </summary>
-        internal override void Shutdown()
-        {
-            string[] loadedSceneAssetNames = m_LoadedSceneAssetNames.ToArray();
-            foreach (string loadedSceneAssetName in loadedSceneAssetNames)
-            {
-                if (SceneIsUnloading(loadedSceneAssetName))
-                {
-                    continue;
-                }
-
-                UnloadScene(loadedSceneAssetName);
-            }
-
-            m_LoadedSceneAssetNames.Clear();
-            m_LoadingSceneAssetNames.Clear();
-            m_UnloadingSceneAssetNames.Clear();
-        }
-
-        /// <summary>
-        /// 设置资源管理器。
-        /// </summary>
-        /// <param name="resourceManager">资源管理器。</param>
-        public void SetResourceManager(IResourceManager resourceManager)
-        {
-            if (resourceManager == null)
-            {
-                throw new GameFrameworkException("Resource manager is invalid.");
-            }
-
-            m_ResourceManager = resourceManager;
-        }
-
-        /// <summary>
-        /// 获取场景是否已加载。
-        /// </summary>
-        /// <param name="sceneAssetName">场景资源名称。</param>
-        /// <returns>场景是否已加载。</returns>
-        public bool SceneIsLoaded(string sceneAssetName)
-        {
-            if (string.IsNullOrEmpty(sceneAssetName))
-            {
-                throw new GameFrameworkException("Scene asset name is invalid.");
-            }
-
-            return m_LoadedSceneAssetNames.Contains(sceneAssetName);
-        }
-
-        /// <summary>
-        /// 获取已加载场景的资源名称。
-        /// </summary>
-        /// <returns>已加载场景的资源名称。</returns>
-        public string[] GetLoadedSceneAssetNames()
-        {
-            return m_LoadedSceneAssetNames.ToArray();
-        }
-
-        /// <summary>
-        /// 获取已加载场景的资源名称。
-        /// </summary>
-        /// <param name="results">已加载场景的资源名称。</param>
-        public void GetLoadedSceneAssetNames(List<string> results)
-        {
-            if (results == null)
-            {
-                throw new GameFrameworkException("Results is invalid.");
-            }
-
-            results.Clear();
-            results.AddRange(m_LoadedSceneAssetNames);
-        }
-
-        /// <summary>
-        /// 获取场景是否正在加载。
-        /// </summary>
-        /// <param name="sceneAssetName">场景资源名称。</param>
-        /// <returns>场景是否正在加载。</returns>
-        public bool SceneIsLoading(string sceneAssetName)
-        {
-            if (string.IsNullOrEmpty(sceneAssetName))
-            {
-                throw new GameFrameworkException("Scene asset name is invalid.");
-            }
-
-            return m_LoadingSceneAssetNames.Contains(sceneAssetName);
-        }
-
-        /// <summary>
-        /// 获取正在加载场景的资源名称。
-        /// </summary>
-        /// <returns>正在加载场景的资源名称。</returns>
-        public string[] GetLoadingSceneAssetNames()
-        {
-            return m_LoadingSceneAssetNames.ToArray();
-        }
-
-        /// <summary>
-        /// 获取正在加载场景的资源名称。
-        /// </summary>
-        /// <param name="results">正在加载场景的资源名称。</param>
-        public void GetLoadingSceneAssetNames(List<string> results)
-        {
-            if (results == null)
-            {
-                throw new GameFrameworkException("Results is invalid.");
-            }
-
-            results.Clear();
-            results.AddRange(m_LoadingSceneAssetNames);
-        }
-
-        /// <summary>
-        /// 获取场景是否正在卸载。
-        /// </summary>
-        /// <param name="sceneAssetName">场景资源名称。</param>
-        /// <returns>场景是否正在卸载。</returns>
-        public bool SceneIsUnloading(string sceneAssetName)
-        {
-            if (string.IsNullOrEmpty(sceneAssetName))
-            {
-                throw new GameFrameworkException("Scene asset name is invalid.");
-            }
-
-            return m_UnloadingSceneAssetNames.Contains(sceneAssetName);
-        }
-
-        /// <summary>
-        /// 获取正在卸载场景的资源名称。
-        /// </summary>
-        /// <returns>正在卸载场景的资源名称。</returns>
-        public string[] GetUnloadingSceneAssetNames()
-        {
-            return m_UnloadingSceneAssetNames.ToArray();
-        }
-
-        /// <summary>
-        /// 获取正在卸载场景的资源名称。
-        /// </summary>
-        /// <param name="results">正在卸载场景的资源名称。</param>
-        public void GetUnloadingSceneAssetNames(List<string> results)
-        {
-            if (results == null)
-            {
-                throw new GameFrameworkException("Results is invalid.");
-            }
-
-            results.Clear();
-            results.AddRange(m_UnloadingSceneAssetNames);
-        }
-
-        /// <summary>
-        /// 检查场景资源是否存在。
-        /// </summary>
-        /// <param name="sceneAssetName">要检查场景资源的名称。</param>
-        /// <returns>场景资源是否存在。</returns>
-        public bool HasScene(string sceneAssetName)
-        {
-            return m_ResourceManager.HasAsset(sceneAssetName) != HasAssetResult.NotExist;
-        }
-
+        #region “LoadScene”和“UnloadScene”的多个垃圾重载方法
         /// <summary>
         /// 加载场景。
         /// </summary>
@@ -351,43 +529,6 @@ namespace GameFramework.Scene
         }
 
         /// <summary>
-        /// 加载场景。
-        /// </summary>
-        /// <param name="sceneAssetName">场景资源名称。</param>
-        /// <param name="priority">加载场景资源的优先级。</param>
-        /// <param name="userData">用户自定义数据。</param>
-        public void LoadScene(string sceneAssetName, int priority, object userData)
-        {
-            if (string.IsNullOrEmpty(sceneAssetName))
-            {
-                throw new GameFrameworkException("Scene asset name is invalid.");
-            }
-
-            if (m_ResourceManager == null)
-            {
-                throw new GameFrameworkException("You must set resource manager first.");
-            }
-
-            if (SceneIsUnloading(sceneAssetName))
-            {
-                throw new GameFrameworkException(Utility.Text.Format("Scene asset '{0}' is being unloaded.", sceneAssetName));
-            }
-
-            if (SceneIsLoading(sceneAssetName))
-            {
-                throw new GameFrameworkException(Utility.Text.Format("Scene asset '{0}' is being loaded.", sceneAssetName));
-            }
-
-            if (SceneIsLoaded(sceneAssetName))
-            {
-                throw new GameFrameworkException(Utility.Text.Format("Scene asset '{0}' is already loaded.", sceneAssetName));
-            }
-
-            m_LoadingSceneAssetNames.Add(sceneAssetName);
-            m_ResourceManager.LoadScene(sceneAssetName, priority, m_LoadSceneCallbacks, userData);
-        }
-
-        /// <summary>
         /// 卸载场景。
         /// </summary>
         /// <param name="sceneAssetName">场景资源名称。</param>
@@ -396,113 +537,7 @@ namespace GameFramework.Scene
             UnloadScene(sceneAssetName, null);
         }
 
-        /// <summary>
-        /// 卸载场景。
-        /// </summary>
-        /// <param name="sceneAssetName">场景资源名称。</param>
-        /// <param name="userData">用户自定义数据。</param>
-        public void UnloadScene(string sceneAssetName, object userData)
-        {
-            if (string.IsNullOrEmpty(sceneAssetName))
-            {
-                throw new GameFrameworkException("Scene asset name is invalid.");
-            }
+        #endregion
 
-            if (m_ResourceManager == null)
-            {
-                throw new GameFrameworkException("You must set resource manager first.");
-            }
-
-            if (SceneIsUnloading(sceneAssetName))
-            {
-                throw new GameFrameworkException(Utility.Text.Format("Scene asset '{0}' is being unloaded.", sceneAssetName));
-            }
-
-            if (SceneIsLoading(sceneAssetName))
-            {
-                throw new GameFrameworkException(Utility.Text.Format("Scene asset '{0}' is being loaded.", sceneAssetName));
-            }
-
-            if (!SceneIsLoaded(sceneAssetName))
-            {
-                throw new GameFrameworkException(Utility.Text.Format("Scene asset '{0}' is not loaded yet.", sceneAssetName));
-            }
-
-            m_UnloadingSceneAssetNames.Add(sceneAssetName);
-            m_ResourceManager.UnloadScene(sceneAssetName, m_UnloadSceneCallbacks, userData);
-        }
-
-        private void LoadSceneSuccessCallback(string sceneAssetName, float duration, object userData)
-        {
-            m_LoadingSceneAssetNames.Remove(sceneAssetName);
-            m_LoadedSceneAssetNames.Add(sceneAssetName);
-            if (m_LoadSceneSuccessEventHandler != null)
-            {
-                LoadSceneSuccessEventArgs loadSceneSuccessEventArgs = LoadSceneSuccessEventArgs.Create(sceneAssetName, duration, userData);
-                m_LoadSceneSuccessEventHandler(this, loadSceneSuccessEventArgs);
-                ReferencePool.Release(loadSceneSuccessEventArgs);
-            }
-        }
-
-        private void LoadSceneFailureCallback(string sceneAssetName, LoadResourceStatus status, string errorMessage, object userData)
-        {
-            m_LoadingSceneAssetNames.Remove(sceneAssetName);
-            string appendErrorMessage = Utility.Text.Format("Load scene failure, scene asset name '{0}', status '{1}', error message '{2}'.", sceneAssetName, status, errorMessage);
-            if (m_LoadSceneFailureEventHandler != null)
-            {
-                LoadSceneFailureEventArgs loadSceneFailureEventArgs = LoadSceneFailureEventArgs.Create(sceneAssetName, appendErrorMessage, userData);
-                m_LoadSceneFailureEventHandler(this, loadSceneFailureEventArgs);
-                ReferencePool.Release(loadSceneFailureEventArgs);
-                return;
-            }
-
-            throw new GameFrameworkException(appendErrorMessage);
-        }
-
-        private void LoadSceneUpdateCallback(string sceneAssetName, float progress, object userData)
-        {
-            if (m_LoadSceneUpdateEventHandler != null)
-            {
-                LoadSceneUpdateEventArgs loadSceneUpdateEventArgs = LoadSceneUpdateEventArgs.Create(sceneAssetName, progress, userData);
-                m_LoadSceneUpdateEventHandler(this, loadSceneUpdateEventArgs);
-                ReferencePool.Release(loadSceneUpdateEventArgs);
-            }
-        }
-
-        private void LoadSceneDependencyAssetCallback(string sceneAssetName, string dependencyAssetName, int loadedCount, int totalCount, object userData)
-        {
-            if (m_LoadSceneDependencyAssetEventHandler != null)
-            {
-                LoadSceneDependencyAssetEventArgs loadSceneDependencyAssetEventArgs = LoadSceneDependencyAssetEventArgs.Create(sceneAssetName, dependencyAssetName, loadedCount, totalCount, userData);
-                m_LoadSceneDependencyAssetEventHandler(this, loadSceneDependencyAssetEventArgs);
-                ReferencePool.Release(loadSceneDependencyAssetEventArgs);
-            }
-        }
-
-        private void UnloadSceneSuccessCallback(string sceneAssetName, object userData)
-        {
-            m_UnloadingSceneAssetNames.Remove(sceneAssetName);
-            m_LoadedSceneAssetNames.Remove(sceneAssetName);
-            if (m_UnloadSceneSuccessEventHandler != null)
-            {
-                UnloadSceneSuccessEventArgs unloadSceneSuccessEventArgs = UnloadSceneSuccessEventArgs.Create(sceneAssetName, userData);
-                m_UnloadSceneSuccessEventHandler(this, unloadSceneSuccessEventArgs);
-                ReferencePool.Release(unloadSceneSuccessEventArgs);
-            }
-        }
-
-        private void UnloadSceneFailureCallback(string sceneAssetName, object userData)
-        {
-            m_UnloadingSceneAssetNames.Remove(sceneAssetName);
-            if (m_UnloadSceneFailureEventHandler != null)
-            {
-                UnloadSceneFailureEventArgs unloadSceneFailureEventArgs = UnloadSceneFailureEventArgs.Create(sceneAssetName, userData);
-                m_UnloadSceneFailureEventHandler(this, unloadSceneFailureEventArgs);
-                ReferencePool.Release(unloadSceneFailureEventArgs);
-                return;
-            }
-
-            throw new GameFrameworkException(Utility.Text.Format("Unload scene failure, scene asset name '{0}'.", sceneAssetName));
-        }
     }
 }

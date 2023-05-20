@@ -17,6 +17,8 @@ namespace GameFramework.Resource
             {
                 /// <summary>
                 /// 本地资源状态信息。
+                /// PS：这有必要吗？又定义一个差不多的”LocalVersionInfo“，应该是该”Resource“在”本地读写区或只读区“中的”信息“
+                ///    但参数来看，其实跟”Resource“类型差不多！！！！
                 /// </summary>
                 [StructLayout(LayoutKind.Auto)]
                 private struct LocalVersionInfo

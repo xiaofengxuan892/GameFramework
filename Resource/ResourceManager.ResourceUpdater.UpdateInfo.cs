@@ -23,9 +23,9 @@ namespace GameFramework.Resource
                 private readonly int m_HashCode;
                 private readonly int m_CompressedLength;
                 private readonly int m_CompressedHashCode;
-                private readonly string m_ResourcePath;
-                private bool m_Downloading;
-                private int m_RetryCount;
+                private readonly string m_ResourcePath;  //该资源下载完成后的本地存储路径
+                private bool m_Downloading;  //该资源当前是否正在下载中
+                private int m_RetryCount;  //该资源尝试下载的次数，默认为0；当超出最大尝试次数后，则代表该资源下载失败
 
                 /// <summary>
                 /// 初始化资源更新信息的新实例。
@@ -142,6 +142,7 @@ namespace GameFramework.Resource
 
                 /// <summary>
                 /// 获取资源路径。
+                /// PS：该资源下载完成后存储到本地的路径
                 /// </summary>
                 public string ResourcePath
                 {

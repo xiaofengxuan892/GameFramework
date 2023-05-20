@@ -13,10 +13,18 @@ namespace GameFramework.Sound
 {
     /// <summary>
     /// 声音管理器。
+    /// PS:
+    /// 问题1."Sound", “SoundGroup”, "SoundAgent"的区别是什么？
+    ///
+    ///
+    /// 问题2.“SoundHelper”，"SoundGroupHelper"和“SoundAgentHelper”的区别是什么？
+    ///
+    ///
     /// </summary>
     internal sealed partial class SoundManager : GameFrameworkModule, ISoundManager
     {
         private readonly Dictionary<string, SoundGroup> m_SoundGroups;
+        //这个命名要改，现在容易混淆，应该改成“m_SoundsLoading”
         private readonly List<int> m_SoundsBeingLoaded;
         private readonly HashSet<int> m_SoundsToReleaseOnLoad;
         private readonly LoadAssetCallbacks m_LoadAssetCallbacks;
@@ -36,6 +44,8 @@ namespace GameFramework.Sound
             m_SoundGroups = new Dictionary<string, SoundGroup>(StringComparer.Ordinal);
             m_SoundsBeingLoaded = new List<int>();
             m_SoundsToReleaseOnLoad = new HashSet<int>();
+            //在加载声音资源时会将“m_LoadedAssetCallback”作为参数传递过去，当加载结束后会自动执行该回调
+            //而回调的具体内容则写在本脚本中，因此具有很大的自由度
             m_LoadAssetCallbacks = new LoadAssetCallbacks(LoadAssetSuccessCallback, LoadAssetFailureCallback, LoadAssetUpdateCallback, LoadAssetDependencyAssetCallback);
             m_ResourceManager = null;
             m_SoundHelper = null;
@@ -131,6 +141,7 @@ namespace GameFramework.Sound
         /// </summary>
         internal override void Shutdown()
         {
+            //只是停止声音播放而已，并没有释放该声音的资源，此时不用处理资源的释放
             StopAllLoadedSounds();
             m_SoundGroups.Clear();
             m_SoundsBeingLoaded.Clear();
@@ -466,14 +477,19 @@ namespace GameFramework.Sound
                 errorMessage = Utility.Text.Format("Sound group '{0}' is have no sound agent.", soundGroupName);
             }
 
+            //判断枚举变量是否有值也可以使用如下的方式
             if (errorCode.HasValue)
             {
                 if (m_PlaySoundFailureEventHandler != null)
                 {
                     PlaySoundFailureEventArgs playSoundFailureEventArgs = PlaySoundFailureEventArgs.Create(serialId, soundAssetName, soundGroupName, playSoundParams, errorCode.Value, errorMessage, userData);
                     m_PlaySoundFailureEventHandler(this, playSoundFailureEventArgs);
+                    //这里回收的时机没有问题。因此上述委托执行完毕后是在外部监听所有的逻辑都执行完，
+                    //然后才会到“ReferencePool.Release”，因此没有问题
                     ReferencePool.Release(playSoundFailureEventArgs);
 
+                    //******** 释放playSoundParams参数的引用 ********
+                    //本质上来讲，跟上面的“xxxEventArgs”变量一样，用完之后都是要回收的
                     if (playSoundParams.Referenced)
                     {
                         ReferencePool.Release(playSoundParams);
@@ -485,7 +501,11 @@ namespace GameFramework.Sound
                 throw new GameFrameworkException(errorMessage);
             }
 
+            //此时代表该声音资源正在加载中，只有在放入AudioSource.clip中才代表已经加载“loaded”
             m_SoundsBeingLoaded.Add(serialId);
+            //正式开始加载声音资源
+            //”PlaySoundInfo.Create“变量的目的在于传递过去，然后在回调时传递过来，这样就不用在本脚本中找一个全局变量
+            //将其存储起来了
             m_ResourceManager.LoadAsset(soundAssetName, priority, m_LoadAssetCallbacks, PlaySoundInfo.Create(serialId, soundGroup, playSoundParams, userData));
             return serialId;
         }
@@ -508,10 +528,18 @@ namespace GameFramework.Sound
         /// <returns>是否停止播放声音成功。</returns>
         public bool StopSound(int serialId, float fadeOutSeconds)
         {
+            //在当前所有SoundAgent中检测，如果不是正在使用的Clip则无需停止(说明该clip已被替换掉)
             if (IsLoadingSound(serialId))
             {
-                m_SoundsToReleaseOnLoad.Add(serialId);
-                m_SoundsBeingLoaded.Remove(serialId);
+                //由于可能出现在“加载声音资源”的过程中执行“StopSound”的情况
+                m_SoundsToReleaseOnLoad.Add(serialId); //方便“LoadAssetSuccessCallback”执行
+
+                //此处逻辑有问题：这里只是停止掉“正在加载中”的音频资源，但可能该资源当前正在加载过程中，并且之后一小段时间内根本无法直接终止
+                //所以此时“m_SoundsBeingLoaded”集合中应该仍然保留该音频资源编号，知道加载结束时才能从集合中移除
+                //为防止频繁点击导致“StopSound”方法重复执行，导致这里的“m_SoundsToReleaseOnLoad.Add”报错
+                //可以事先加入“Contains”判断
+                m_SoundsBeingLoaded.Remove(serialId);  //用于检测当前加载中的资源的集合，在多处使用
+
                 return true;
             }
 
@@ -521,6 +549,8 @@ namespace GameFramework.Sound
                 {
                     return true;
                 }
+
+                //如果失败则说明该clip已被替换掉则自然无需再“StopSound”
             }
 
             return false;
@@ -547,12 +577,14 @@ namespace GameFramework.Sound
         }
 
         /// <summary>
-        /// 停止所有正在加载的声音。
+        /// 停止所有正在加载中的声音。
         /// </summary>
         public void StopAllLoadingSounds()
         {
             foreach (int serialId in m_SoundsBeingLoaded)
             {
+                //这里只是需要停止掉所有“正在加载中”的音频资源，但该音频可能当前或之后一小段时间内其仍然处于加载中
+                //因此不能改变“m_SoundsBeingLoaded”集合中的元素
                 m_SoundsToReleaseOnLoad.Add(serialId);
             }
         }
@@ -619,6 +651,7 @@ namespace GameFramework.Sound
                 throw new GameFrameworkException("Play sound info is invalid.");
             }
 
+            //在加载声音资源之初就已经记录了该资源的“serialId”
             if (m_SoundsToReleaseOnLoad.Contains(playSoundInfo.SerialId))
             {
                 m_SoundsToReleaseOnLoad.Remove(playSoundInfo.SerialId);
@@ -629,13 +662,18 @@ namespace GameFramework.Sound
 
                 ReferencePool.Release(playSoundInfo);
                 m_SoundHelper.ReleaseSoundAsset(soundAsset);
+
+                //这里逻辑有问题：如果要提前“return”，则应该同时移除掉“m_SoundsBeingLoaded”集合中的该“音频id”
                 return;
             }
 
+            //为防止部分情况提前return，该句应该放到最前端执行
             m_SoundsBeingLoaded.Remove(playSoundInfo.SerialId);
 
+            //加载声音资源完毕后开始“PlaySound”
             PlaySoundErrorCode? errorCode = null;
             ISoundAgent soundAgent = playSoundInfo.SoundGroup.PlaySound(playSoundInfo.SerialId, soundAsset, playSoundInfo.PlaySoundParams, out errorCode);
+            //对于”播放声音“的需求而言，只要能够找到”合适的SoundAgent“基本就代表”声音播放成功“
             if (soundAgent != null)
             {
                 if (m_PlaySoundSuccessEventHandler != null)
@@ -654,7 +692,10 @@ namespace GameFramework.Sound
                 return;
             }
 
+            //这里逻辑有问题：走到这一步是因为”没有找到合适的SoundAgent“，但可以肯定”m_SoundsToReleaseOnLoad“集合中没有该音频serialId
             m_SoundsToReleaseOnLoad.Remove(playSoundInfo.SerialId);
+
+            //由于”soundAgent为null导致声音播放失败“，因此需要释放该”已经加载成功的声音资源“
             m_SoundHelper.ReleaseSoundAsset(soundAsset);
             string errorMessage = Utility.Text.Format("Sound group '{0}' play sound '{1}' failure.", playSoundInfo.SoundGroup.Name, soundAssetName);
             if (m_PlaySoundFailureEventHandler != null)
@@ -700,6 +741,7 @@ namespace GameFramework.Sound
                 return;
             }
 
+            //由于有return语句，该句应该放在最前端执行
             m_SoundsBeingLoaded.Remove(playSoundInfo.SerialId);
             string appendErrorMessage = Utility.Text.Format("Load sound failure, asset name '{0}', status '{1}', error message '{2}'.", soundAssetName, status, errorMessage);
             if (m_PlaySoundFailureEventHandler != null)

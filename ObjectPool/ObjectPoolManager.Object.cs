@@ -13,11 +13,17 @@ namespace GameFramework.ObjectPool
     {
         /// <summary>
         /// 内部对象。
+        /// PS：单个对象，使用“Object<T>”限制所有对象都是“ObjectBase”的子类对象
+        ///    参照单例模式“Singleton<T>”来理解即可
         /// </summary>
         /// <typeparam name="T">对象类型。</typeparam>
         private sealed class Object<T> : IReference where T : ObjectBase
         {
+            //封装了一种“class”，名称为“Object”，其中用到的参数是“T”，该参数继承自“ObjectBase”
             private T m_Object;
+            //该参数代表本internalObject在对象池中被使用的次数。当创建一个新的“internalObject”时，虽然其不会被放入对象池中，
+            //但会使用“Register”方法将该对象注册到“对象池的m_Objects”集合中，此时“m_SpawnCount”默认为“spawned = true”,即数值为1
+            //但是当去需要回收时，则会将该对象放入对象池中，此时会更新其计数，即“m_SpawnCount”为0，即此时“spawned = false”
             private int m_SpawnCount;
 
             /// <summary>
@@ -127,6 +133,7 @@ namespace GameFramework.ObjectPool
                     throw new GameFrameworkException("Object is invalid.");
                 }
 
+                //这里传递过来的“obj”已经是“ObjectBase”了，如“EntitiyInstanceObject”对象
                 Object<T> internalObject = ReferencePool.Acquire<Object<T>>();
                 internalObject.m_Object = obj;
                 internalObject.m_SpawnCount = spawned ? 1 : 0;
@@ -158,6 +165,9 @@ namespace GameFramework.ObjectPool
 
             /// <summary>
             /// 获取对象。
+            /// PS：该对象本身被获取时执行。
+            /// 注意：从池子中取出对象，并不是直接就拿出一个。而是在从池子中拿出来后还要执行该“对象”自身的“获取方法，即Spawn”
+            ///      并不是单方面的“获取”
             /// </summary>
             /// <returns>对象。</returns>
             public T Spawn()

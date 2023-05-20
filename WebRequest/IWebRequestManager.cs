@@ -245,6 +245,7 @@ namespace GameFramework.WebRequest
 
         /// <summary>
         /// 增加 Web 请求任务。
+        /// PS：这傻逼方法中的“userdata”参数其实已经是“WWWFormInfo”对象，
         /// </summary>
         /// <param name="webRequestUri">Web 请求地址。</param>
         /// <param name="postData">要发送的数据流。</param>

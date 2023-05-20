@@ -9,6 +9,8 @@ namespace GameFramework.Sound
 {
     internal sealed partial class SoundManager : GameFrameworkModule, ISoundManager
     {
+        //无法理解：为什么不把“PlaySoundParams”中的参数也放到“PlaySoundInfo”中，
+        //单独搞一个“PlaySoundParams.cs”真是繁琐啊
         private sealed class PlaySoundInfo : IReference
         {
             private int m_SerialId;

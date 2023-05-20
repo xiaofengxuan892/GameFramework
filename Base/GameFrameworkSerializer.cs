@@ -16,6 +16,9 @@ namespace GameFramework
     /// <typeparam name="T">要序列化的数据类型。</typeparam>
     public abstract class GameFrameworkSerializer<T>
     {
+        //TODO: 在所有的“xxCallback”中都增加与其向匹配的“version”配置，不同“version”执行不同的“callback”
+        //      并且“m_LatestSerializeCallbackVersion”只保存当前最大的“version”数值
+        //      这种模式主要是为了解决什么问题呢？
         private readonly Dictionary<byte, SerializeCallback> m_SerializeCallbacks;
         private readonly Dictionary<byte, DeserializeCallback> m_DeserializeCallbacks;
         private readonly Dictionary<byte, TryGetValueCallback> m_TryGetValueCallbacks;
@@ -118,6 +121,9 @@ namespace GameFramework
                 throw new GameFrameworkException("No serialize callback registered.");
             }
 
+            //当外部调用序列化方法时，如果没有传入“序列化回调的版本号”，就默认使用最新的“m_LatestSerializeCallbackVersion”即可
+            //但是如果外部传入了“序列化回调的版本号”，则必然使用指定的“callback”才可以
+            //下述的“重载方法Serialize(Stream stream, T data, byte version)”即是此原因
             return Serialize(stream, data, m_LatestSerializeCallbackVersion);
         }
 
@@ -130,6 +136,7 @@ namespace GameFramework
         /// <returns>是否序列化数据成功。</returns>
         public bool Serialize(Stream stream, T data, byte version)
         {
+            //这里只是加入“header”数据，真正的“data”写入仍然交由各自的“callback”来执行
             byte[] header = GetHeader();
             stream.WriteByte(header[0]);
             stream.WriteByte(header[1]);
@@ -201,6 +208,7 @@ namespace GameFramework
 
         /// <summary>
         /// 获取数据头标识。
+        /// PS: 不同的“GameFrameworkSerializer”派生子类的“Header”不同，应该是具有一定的效果，后续需要研究下
         /// </summary>
         /// <returns>数据头标识。</returns>
         protected abstract byte[] GetHeader();

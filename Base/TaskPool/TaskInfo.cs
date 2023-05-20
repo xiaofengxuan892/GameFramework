@@ -10,7 +10,9 @@ using System.Runtime.InteropServices;
 namespace GameFramework
 {
     /// <summary>
-    /// 任务信息。
+    /// 任务信息
+    /// PS：其作用与”TaskBase“有一部分重复，但该类型主要是：当外部需要获取任务的详细信息时使用
+    ///     并且所有参数都是”readonly“。虽然用”TaskBase“也可以，但出于”安全和方便“的角度，这里用”TaskInfo“还是会好一点点
     /// </summary>
     [StructLayout(LayoutKind.Auto)]
     public struct TaskInfo

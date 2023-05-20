@@ -133,6 +133,7 @@ namespace GameFramework.Sound
 
             /// <summary>
             /// 增加声音代理辅助器。
+            /// PS: 这个命名绝对是要改掉的，完全错了。从实际执行逻辑来看，完全是添加“SoundAgent”
             /// </summary>
             /// <param name="soundHelper">声音辅助器接口。</param>
             /// <param name="soundAgentHelper">要增加的声音代理辅助器。</param>
@@ -155,6 +156,7 @@ namespace GameFramework.Sound
                 SoundAgent candidateAgent = null;
                 foreach (SoundAgent soundAgent in m_SoundAgents)
                 {
+                    //从声音组中选择当前可以播放的“SoundAgent”
                     if (!soundAgent.IsPlaying)
                     {
                         candidateAgent = soundAgent;
@@ -177,6 +179,7 @@ namespace GameFramework.Sound
                     }
                 }
 
+                //经过以上遍历查找依然没有找到合适的“SoundAgent”，则
                 if (candidateAgent == null)
                 {
                     errorCode = PlaySoundErrorCode.IgnoredDueToLowPriority;
@@ -200,6 +203,7 @@ namespace GameFramework.Sound
                 candidateAgent.SpatialBlend = playSoundParams.SpatialBlend;
                 candidateAgent.MaxDistance = playSoundParams.MaxDistance;
                 candidateAgent.DopplerLevel = playSoundParams.DopplerLevel;
+                //正式播放该音频
                 candidateAgent.Play(playSoundParams.FadeInSeconds);
                 return candidateAgent;
             }

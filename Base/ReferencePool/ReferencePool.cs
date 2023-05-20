@@ -179,6 +179,7 @@ namespace GameFramework
             GetReferenceCollection(referenceType).RemoveAll();
         }
 
+        //感觉这个“类型检查”应该始终执行的，无论什么情况
         private static void InternalCheckReferenceType(Type referenceType)
         {
             if (!m_EnableStrictCheck)

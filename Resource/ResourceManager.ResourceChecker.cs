@@ -120,6 +120,7 @@ namespace GameFramework.Resource
                         throw new GameFrameworkException("Deserialize updatable version list failure.");
                     }
 
+                    //“服务器版本文件”中的“Asset[]”集合是按照“每个资源的GUID”来排列的，因此这里直接获取到的“UpdatableVersionList.Asset[]”参数必然也是相同的排列顺序
                     UpdatableVersionList.Asset[] assets = versionList.GetAssets();
                     UpdatableVersionList.Resource[] resources = versionList.GetResources();
                     UpdatableVersionList.FileSystem[] fileSystems = versionList.GetFileSystems();
